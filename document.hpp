@@ -7,6 +7,9 @@
 #include<string>
 #include<memory>
 #include<stdexcept>
+#include<iomanip> // for double precision
+
+namespace fluxdb{
 
 enum class Type {
     Int,    
@@ -19,14 +22,14 @@ enum class Type {
 struct Value;
 
 //but recursive Value objects copy the whole structure
-using Object = std::unordered_map<std::string, std::shared_ptr<Value>>; //Using shared_ptr inside the variant makes it lighter and avoids deep copies
+using Object = std::unordered_map<std::string, std::unique_ptr<Value>>; //Using unique_ptr now
 
 struct Value{
     Type type;
-    std::variant<int, double, bool, std::string, Object> data; 
+    std::variant<int64_t, double, bool, std::string, Object> data; 
 
     // per type constructor for type value sync
-    Value(int v)               : type(Type::Int), data(v) {}
+    Value(int64_t v)           : type(Type::Int), data(v) {}
     Value(double v)            : type(Type::Double), data(v) {}
     Value(bool v)              : type(Type::Bool), data(v) {}
     Value(const std::string& v): type(Type::String), data(v) {}
@@ -50,9 +53,9 @@ struct Value{
 
 
     // per type asX for type safety
-    int asInt() const {
+    int64_t asInt() const {
     if (type != Type::Int) throw std::runtime_error("Value is not an int");
-    return std::get<int>(data);
+    return std::get<int64_t>(data);
     }
 
     double asDouble() const {
@@ -65,12 +68,13 @@ struct Value{
         return std::get<bool>(data);
     }
 
-    std::string asString() const {
+    //refrences to avoid copies
+    const std::string& asString() const {
         if (type != Type::String) throw std::runtime_error("Value is not a string");
         return std::get<std::string>(data);
     }
 
-    const Object asObject() const {
+    const Object& asObject() const {
         if (type != Type::Object) throw std::runtime_error("Value is not an Object");
         return std::get<Object>(data);
     }
@@ -78,8 +82,13 @@ struct Value{
 
     std::string ToString() const {
     switch(type) {
-        case Type::Int:    return std::to_string(std::get<int>(data));
-        case Type::Double: return std::to_string(std::get<double>(data));
+        case Type::Int:    return std::to_string(std::get<int64_t>(data));
+        case Type::Double: {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(6);
+            oss << std::get<double>(data);
+            return oss.str();
+        }
         case Type::Bool:   return std::get<bool>(data) ? "true" : "false";
         case Type::String: return std::get<std::string>(data);
         case Type::Object: return "{...}";
@@ -88,6 +97,7 @@ struct Value{
 }
 
 };
+}
 
 #endif
 
