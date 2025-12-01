@@ -1,7 +1,7 @@
 #include<iostream>
 #include<unordered_map>
 #include<optional>
-#include <cstdint> // for uint64 -> fixed on all platforms unlike long
+#include<cstdint> // for uint64 -> fixed on all platforms unlike long
 
 using Id = std::uint64_t;
 
