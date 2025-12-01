@@ -5,25 +5,33 @@
 #include<cstdint>
 #include<variant>
 #include<string>
-#include<iostream>
+#include<memory>
+#include<stdexcept>
 
 enum class Type {
-    Int,      // usually becomes 0
-    Double,   // usually 1
-    Bool,     // usually 2
-    String,   // usually 3
-    Object    // usually 4
+    Int,    
+    Double,  
+    Bool,     
+    String,   
+    Object    
 };
 
 struct Value;
 
-using Object = std::unordered_map<std::string, Value>;
+//but recursive Value objects copy the whole structure
+using Object = std::unordered_map<std::string, std::shared_ptr<Value>>; //Using shared_ptr inside the variant makes it lighter and avoids deep copies
 
 struct Value{
     Type type;
     std::variant<int, double, bool, std::string, Object> data; 
 
-    Value(Type t, std::variant<int, double, bool, std::string, Object> dt) : type(t), data(dt) {}
+    // per type constructor for type value sync
+    Value(int v)               : type(Type::Int), data(v) {}
+    Value(double v)            : type(Type::Double), data(v) {}
+    Value(bool v)              : type(Type::Bool), data(v) {}
+    Value(const std::string& v): type(Type::String), data(v) {}
+    Value(const Object& v)     : type(Type::Object), data(v) {}
+
 
     bool IsType(Type t) const {
         return type == t;
@@ -40,10 +48,33 @@ struct Value{
         }
     }
 
-    template<typename T>
-    T asDataType() const {   // asX function to maintain type safety
-        return std::get<T>(data);
+
+    // per type asX for type safety
+    int asInt() const {
+    if (type != Type::Int) throw std::runtime_error("Value is not an int");
+    return std::get<int>(data);
     }
+
+    double asDouble() const {
+        if (type != Type::Double) throw std::runtime_error("Value is not a double");
+        return std::get<double>(data);
+    }
+
+    bool asBool() const {
+        if (type != Type::Bool) throw std::runtime_error("Value is not a bool");
+        return std::get<bool>(data);
+    }
+
+    std::string asString() const {
+        if (type != Type::String) throw std::runtime_error("Value is not a string");
+        return std::get<std::string>(data);
+    }
+
+    const Object asObject() const {
+        if (type != Type::Object) throw std::runtime_error("Value is not an Object");
+        return std::get<Object>(data);
+    }
+
 
     std::string ToString() const {
     switch(type) {
