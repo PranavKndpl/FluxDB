@@ -3,14 +3,14 @@
 #include <optional>
 #include <cstdint>
 #include "document.hpp"
-
-using namespace fluxdb;
+#include "index_manager.hpp"
 
 using Id = std::uint64_t;
 
 class Collection {
 private:
-    std::unordered_map<Id, Document> db;
+    std::unordered_map<Id, fluxdb::Document> db;
+    fluxdb::IndexManager indexer;
 
 public:
     Collection() = default;
@@ -19,22 +19,25 @@ public:
         db.reserve(capacity_hint);
     }
 
-    void insert(Id id, const Document& doc) {
-        db.emplace(id, doc);
+    void insert(Id id, const fluxdb::Document& doc) {
+        indexer.addDocument(id,doc);
+
+        db.emplace(id, doc); // copying
     }
 
-    void insert(Id id, Document&& doc) { // for moving
+    void insert(Id id, fluxdb::Document&& doc) { // for moving
+        indexer.addDocument(id, doc);
         db.emplace(id, std::move(doc));
     }
 
-    std::optional<std::reference_wrapper<const Document>> getById(Id id) const {
+    std::optional<std::reference_wrapper<const fluxdb::Document>> getById(Id id) const {
         auto it = db.find(id);
         if (it != db.end())
             return it->second;  // returns reference_wrapper<const Document>
         return std::nullopt;
     }
 
-    bool update(Id id, const Document& doc) {
+    bool update(Id id, const fluxdb::Document& doc) {
         auto it = db.find(id);
         if (it != db.end()) {
             it->second = doc;
@@ -44,6 +47,35 @@ public:
     }
 
     bool removeById(Id id) {
-        return db.erase(id) > 0;
+        auto it = db.find(id);
+        if (it == db.end()) return false; 
+
+        indexer.removeDocument(id, it->second);
+
+        db.erase(it);
+        return true;
+    }
+
+    void createIndex(const std::string& field, int type = 0) {
+        indexer.createIndex(field, type);
+    }
+
+    std::vector<Id> find(const std::string& field, const fluxdb::Value& value) {
+        return indexer.searchHash(field, value);
+    }
+    
+    void printDoc(Id id) const {
+        auto it = db.find(id);
+        if (it == db.end()) {
+            std::cout << "Doc " << id << " not found.\n";
+            return;
+        }
+
+        std::cout << "Doc " << id << ": { ";
+        for (const auto& [key, valPtr] : it->second) {
+            // valPtr is a shared_ptr, so we dereference it (*valPtr)
+            std::cout << key << ": " << valPtr->ToString() << ", ";
+        }
+        std::cout << "}\n";
     }
 };

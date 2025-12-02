@@ -38,14 +38,11 @@ struct Value{
     Value(const std::string& v): type(Type::String), data(v) {}
     Value(const char* v)       : type(Type::String), data(std::string(v)) {} // helper for "literals"
 
-    Value(const Document& v)     : type(Type::Object), data(v) {}
+    Value(const Document& v)   : type(Type::Object), data(v) {}
 
     // accept Document&& and move it into the variant (no copy)
-    Value(Document&& v)         : type(Type::Object), data(std::move(v)) {}
+    Value(Document&& v)        : type(Type::Object), data(std::move(v)) {}
 
-     // --- CRITICAL CHANGE: Copying must be allowed for Indexing ---
-    // Indexes need to store their own copy of the Key. 
-    // Since we use shared_ptr for Objects, this is efficient (shallow copy of the map).
     Value(const Value&) = default;
     Value& operator=(const Value&) = default;
 
