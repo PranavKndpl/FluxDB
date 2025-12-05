@@ -87,6 +87,25 @@ public:
         return results;
     }
 
+    // Find IDs where field is between min and max (Inclusive: [min, max])
+    std::vector<uint64_t> searchSorted(const std::string& field, const Value& min, const Value& max) {
+        std::vector<uint64_t> results;
+
+        auto it = sorted_indexes.find(field);
+        if (it == sorted_indexes.end()) return results;
+
+        const auto& index = it->second; //accessing multimap for bound fncs
+
+        auto start = index.lower_bound(min);
+        auto end = index.upper_bound(max);
+
+        for (auto iter = start; iter != end; ++iter) {
+            results.push_back(iter->second);
+        }
+
+        return results;
+    }
+
 private:
     template <typename MapType>
     void removeFromMultimap(MapType& index, const Value& val, uint64_t docId) {

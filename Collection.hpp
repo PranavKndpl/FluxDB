@@ -63,6 +63,10 @@ public:
     std::vector<Id> find(const std::string& field, const fluxdb::Value& value) {
         return indexer.searchHash(field, value);
     }
+
+    std::vector<Id> findRange(const std::string& field, const fluxdb::Value& min, const fluxdb::Value& max) {
+        return indexer.searchSorted(field, min, max);
+    }
     
     void printDoc(Id id) const {
         auto it = db.find(id);
@@ -78,4 +82,6 @@ public:
         }
         std::cout << "}\n";
     }
+
+    
 };

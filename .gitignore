@@ -1,8 +1,4 @@
 NOTES
 *.exe
 test.cpp
-<<<<<<< HEAD
 .vscode/
-=======
-.vscode/
->>>>>>> 39641cc (added index manager + some changes)

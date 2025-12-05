@@ -33,6 +33,7 @@ struct Value{
 
     // per type constructor for type value sync
     Value(int64_t v)           : type(Type::Int), data(v) {}
+    Value(int v) : type(Type::Int), data(static_cast<int64_t>(v)) {} //if plain int, treat it as an int64_t
     Value(double v)            : type(Type::Double), data(v) {}
     Value(bool v)              : type(Type::Bool), data(v) {}
     Value(const std::string& v): type(Type::String), data(v) {}
