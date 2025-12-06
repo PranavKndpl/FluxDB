@@ -5,6 +5,8 @@
 #include "document.hpp"
 #include "index_manager.hpp"
 #include "serializer.hpp"
+#include <fstream>
+
 
 using Id = std::uint64_t;
 
@@ -12,23 +14,54 @@ class Collection {
 private:
     std::unordered_map<Id, fluxdb::Document> db;
     fluxdb::IndexManager indexer;
+    std::ofstream wal_file;
+
+    fluxdb::Serializer serializer;
+
+    void logOperation(uint8_t opCode, Id id, const std::vector<uint8_t>& data = {}) {
+        if (!wal_file.is_open()) return;
+
+        wal_file.put(static_cast<char>(opCode));
+
+        wal_file.write(reinterpret_cast<const char*>(&id), sizeof(id));
+
+        if (opCode == 0x01) {
+            uint32_t size = static_cast<uint32_t>(data.size());
+            wal_file.write(reinterpret_cast<const char*>(&size), sizeof(size));
+            wal_file.write(reinterpret_cast<const char*>(data.data()), size);
+        }
+
+        wal_file.flush(); // immediate write from buffer
+    }
 
 public:
-    Collection() = default;
+    Collection() {
+        wal_file.open("wal.log", std::ios::binary | std::ios::app);
+    }
 
     explicit Collection(std::size_t capacity_hint) {
         db.reserve(capacity_hint);
+        wal_file.open("wal.log", std::ios::binary | std::ios::app);
     }
 
     void insert(Id id, const fluxdb::Document& doc) {
         indexer.addDocument(id,doc);
 
         db.emplace(id, doc); // copying
+
+        std::vector<uint8_t> serializedDoc = serializer.serialize(doc);
+        logOperation(0x01, id, serializedDoc);
+
     }
 
     void insert(Id id, fluxdb::Document&& doc) { // for moving
         indexer.addDocument(id, doc);
+
+        std::vector<uint8_t> serializedDoc = serializer.serialize(doc);
+        logOperation(0x01, id, serializedDoc); // serilizing before, doc becomes empty after move
+
         db.emplace(id, std::move(doc));
+
     }
 
     std::optional<std::reference_wrapper<const fluxdb::Document>> getById(Id id) const {
@@ -41,7 +74,17 @@ public:
     bool update(Id id, const fluxdb::Document& doc) {
         auto it = db.find(id);
         if (it != db.end()) {
+            // Remove OLD values from Index (Critical!)
+            // If you don't do this, the index will point to ID 101 for both age 25 AND 26.
+            indexer.removeDocument(id, it->second);
+
             it->second = doc;
+
+            indexer.addDocument(id, doc);
+
+            std::vector<uint8_t> serializedDoc = serializer.serialize(doc);
+            logOperation(0x01, id, serializedDoc);
+
             return true;
         }
         return false;
@@ -51,6 +94,7 @@ public:
         auto it = db.find(id);
         if (it == db.end()) return false; 
 
+        logOperation(0x02, id);
         indexer.removeDocument(id, it->second);
 
         db.erase(it);
