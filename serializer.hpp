@@ -38,6 +38,28 @@ public:
         writeBytes(s.data(), len); // string data
     }
 
+    void writeArray(const Array& arr) {
+        uint32_t count = static_cast<uint32_t>(arr.size());
+        writeBytes(&count, sizeof(count));
+
+        // no Keys
+        for (const auto& valPtr : arr) {
+            const Value& v = *valPtr;
+            
+            writeByte(static_cast<uint8_t>(v.type));
+
+            switch (v.type) {
+                case Type::Int:    writeInt64(v.asInt()); break;
+                case Type::Double: writeDouble(v.asDouble()); break;
+                case Type::Bool:   writeByte(v.asBool() ? 1 : 0); break;
+                case Type::String: writeString(v.asString()); break;
+                
+                case Type::Object: writeDocumentMap(v.asObject()); break;
+                case Type::Array:  writeArray(v.asArray()); break; // Double Recursion
+            }
+        }
+    }
+
     void writeDocumentMap(const Document& doc) {
         uint32_t count = static_cast<uint32_t>(doc.size());
         writeBytes(&count, sizeof(count));
@@ -56,6 +78,8 @@ public:
                 case Type::Object: 
                     writeDocumentMap(v.asObject()); // recursive call
                     break; 
+                case Type::Array:
+                    writeArray(v.asArray()); break;
             }
         }
     }
@@ -118,6 +142,35 @@ public:
         return s;
     }
 
+    Array readArray() {
+        Array arr;
+        
+        uint32_t count = readRaw<uint32_t>();
+        arr.reserve(count);
+
+        for (uint32_t i = 0; i < count; ++i) {
+            // no Key to read
+            Type type = static_cast<Type>(readByte());
+
+            switch (type) {
+                case Type::Int:    
+                    arr.push_back(std::make_shared<Value>(readInt64())); break;
+                case Type::Double: 
+                    arr.push_back(std::make_shared<Value>(readDouble())); break;
+                case Type::Bool:   
+                    arr.push_back(std::make_shared<Value>(readByte() != 0)); break;
+                case Type::String: 
+                    arr.push_back(std::make_shared<Value>(readString())); break;
+                
+                case Type::Object:
+                    arr.push_back(std::make_shared<Value>(readDocumentMap())); break;
+                case Type::Array:
+                    arr.push_back(std::make_shared<Value>(readArray())); break;
+            }
+        }
+        return arr;
+    }
+
     Document readDocumentMap() {
         Document doc;
 
@@ -141,6 +194,9 @@ public:
                     // read the inner map, wrap it in a Value, and store it
                     doc[key] = std::make_shared<Value>(readDocumentMap());
                     break; 
+                
+                case Type::Array:
+                    doc[key] = std::make_shared<Value>(readArray()); break;
             }
         }
         return doc;

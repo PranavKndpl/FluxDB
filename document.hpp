@@ -19,17 +19,19 @@ enum class Type {
     Double,  
     Bool,     
     String,   
-    Object    
+    Object,
+    Array    
 };
 
 struct Value;
 
 // document alias for better understanding (not feeling like a recursive object)
 using Document = std::unordered_map<std::string, std::shared_ptr<Value>>;
+using Array    = std::vector<std::shared_ptr<Value>>;
 
 struct Value{
     Type type;
-    std::variant<int64_t, double, bool, std::string, Document> data; 
+    std::variant<int64_t, double, bool, std::string, Document, Array> data; 
 
     // per type constructor for type value sync
     Value(int64_t v)           : type(Type::Int), data(v) {}
@@ -49,6 +51,10 @@ struct Value{
 
     Value(Value&&) = default;
     Value& operator=(Value&&) = default;
+
+    //array consts
+    Value(const Array& v) : type(Type::Array), data(v) {}
+    Value(Array&& v)      : type(Type::Array), data(std::move(v)) {}
 
     template<typename Fn, typename = std::enable_if_t<std::is_invocable_v<Fn, Document&>>>
     static Document make_document(Fn f) {
@@ -108,6 +114,11 @@ struct Value{
     const Document& asObject() const {
         if (type != Type::Object) throw std::runtime_error("Value is not an Object");
         return std::get<Document>(data);
+    }
+
+    const Array& asArray() const {
+        if (type != Type::Array) throw std::runtime_error("Value is not an Array");
+        return std::get<Array>(data);
     }
 
 
@@ -190,6 +201,3 @@ struct ValueHasher {
 }
 
 #endif
-
-
-
