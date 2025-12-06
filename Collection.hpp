@@ -34,12 +34,66 @@ private:
         wal_file.flush(); // immediate write from buffer
     }
 
+    void recover() {
+        std::ifstream file("wal.log", std::ios::binary);
+        if (!file.is_open()) return; 
+
+        std::cout << "[Recovery] Starting WAL replay...\n";
+        int count = 0;
+
+        while (file.peek() != EOF) {
+            char opCode;
+            file.get(opCode);
+
+            Id id;
+            file.read(reinterpret_cast<char*>(&id), sizeof(id));
+
+            if (opCode == 0x01) { // INSERT / UPDATE
+                uint32_t size;
+                file.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+                std::vector<uint8_t> buffer(size);
+                file.read(reinterpret_cast<char*>(buffer.data()), size);
+
+                fluxdb::Deserializer reader(buffer);
+                fluxdb::Document doc = reader.deserialize();
+
+                // SILENT INSERT (RAM + Index only)
+                // Check if this is an overwrite (Update)
+                auto it = db.find(id);
+                if (it != db.end()) {
+                    // It's an update: Clean up old index first
+                    indexer.removeDocument(id, it->second);
+                    it->second = doc; // Overwrite data
+                } else {
+                    // It's a new insert
+                    db.emplace(id, doc);
+                }
+                // Update index with new data
+                indexer.addDocument(id, doc);
+
+            } else if (opCode == 0x02) { // DELETE
+                // SILENT DELETE
+                auto it = db.find(id);
+                if (it != db.end()) {
+                    indexer.removeDocument(id, it->second);
+                    db.erase(it);
+                }
+            }
+            count++;
+        }
+
+        std::cout << "[Recovery] Replayed " << count << " operations.\n";
+    }
+
 public:
     Collection() {
+        recover();
         wal_file.open("wal.log", std::ios::binary | std::ios::app);
     }
 
     explicit Collection(std::size_t capacity_hint) {
+        recover();
         db.reserve(capacity_hint);
         wal_file.open("wal.log", std::ios::binary | std::ios::app);
     }
