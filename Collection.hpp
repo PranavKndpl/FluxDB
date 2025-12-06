@@ -17,6 +17,7 @@ private:
     std::ofstream wal_file;
 
     fluxdb::Serializer serializer;
+    Id next_id = 1;
 
     //consolidate Memory to Disk and wipe the Log
     void checkpoint() {
@@ -81,6 +82,10 @@ private:
 
             Id id;
             file.read(reinterpret_cast<char*>(&id), sizeof(id));
+
+            if (id >= next_id) {
+                next_id = id + 1;
+            }
 
             if (opCode == 0x01) { // INSERT / UPDATE
                 uint32_t size;
@@ -150,6 +155,19 @@ public:
 
     }
 
+    //auto-increment insert
+    Id insert(const fluxdb::Document& doc) {
+        Id assignedId = next_id++;
+        insert(assignedId, doc); 
+        return assignedId;
+    }
+    
+    Id insert(fluxdb::Document&& doc) {
+        Id assignedId = next_id++;
+        insert(assignedId, std::move(doc));
+        return assignedId;
+    }
+
     std::optional<std::reference_wrapper<const fluxdb::Document>> getById(Id id) const {
         auto it = db.find(id);
         if (it != db.end())
@@ -208,6 +226,8 @@ public:
         std::ofstream file(filename, std::ios::binary | std::ios::out);
         if (!file.is_open()) throw std::runtime_error("Cannot open file: " + filename);
 
+        file.write(reinterpret_cast<const char*>(&next_id), sizeof(next_id));
+
         //Write Count of documents
         uint64_t count = db.size();
         file.write(reinterpret_cast<const char*>(&count), sizeof(count));
@@ -239,6 +259,8 @@ public:
         //Clear current state
         db.clear();
         indexer.clear();
+
+        file.read(reinterpret_cast<char*>(&next_id), sizeof(next_id));
 
         //Read Count
         uint64_t count = 0;
