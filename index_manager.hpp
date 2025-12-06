@@ -106,6 +106,11 @@ public:
         return results;
     }
 
+    void clear() {
+        sorted_indexes.clear();
+        hash_indexes.clear();
+    }
+
 private:
     template <typename MapType>
     void removeFromMultimap(MapType& index, const Value& val, uint64_t docId) {

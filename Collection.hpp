@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "document.hpp"
 #include "index_manager.hpp"
+#include "serializer.hpp"
 
 using Id = std::uint64_t;
 
@@ -66,6 +67,74 @@ public:
 
     std::vector<Id> findRange(const std::string& field, const fluxdb::Value& min, const fluxdb::Value& max) {
         return indexer.searchSorted(field, min, max);
+    }
+
+// ---------------------------------------------------------
+// PERSISTENCE (Snapshots)
+
+    void save(const std::string& filename) {
+        fluxdb::Serializer writer;
+        
+        std::ofstream file(filename, std::ios::binary | std::ios::out);
+        if (!file.is_open()) throw std::runtime_error("Cannot open file: " + filename);
+
+        //Write Count of documents
+        uint64_t count = db.size();
+        file.write(reinterpret_cast<const char*>(&count), sizeof(count));
+
+        //Write each Document
+        for (const auto& [id, doc] : db) {
+            // Serialize the doc
+            std::vector<uint8_t> bytes = writer.serialize(doc);
+            
+            //Write ID (So we keep the same ID)
+            file.write(reinterpret_cast<const char*>(&id), sizeof(id));
+            
+            // Write Size of this doc's binary blob
+            uint32_t docSize = static_cast<uint32_t>(bytes.size());
+            file.write(reinterpret_cast<const char*>(&docSize), sizeof(docSize));
+            
+            // Write the blob
+            file.write(reinterpret_cast<const char*>(bytes.data()), docSize);
+        }
+        
+        std::cout << "[Snapshot] Saved " << count << " documents to " << filename << "\n";
+    }
+
+    // Load state from disk 
+    void load(const std::string& filename) {
+        std::ifstream file(filename, std::ios::binary | std::ios::in);
+        if (!file.is_open()) throw std::runtime_error("Cannot open file: " + filename);
+
+        //Clear current state
+        db.clear();
+        indexer.clear();
+
+        //Read Count
+        uint64_t count = 0;
+        file.read(reinterpret_cast<char*>(&count), sizeof(count));
+
+        //Read Loop
+        for (uint64_t i = 0; i < count; ++i) {
+            Id id;
+            file.read(reinterpret_cast<char*>(&id), sizeof(id));
+
+            uint32_t docSize;
+            file.read(reinterpret_cast<char*>(&docSize), sizeof(docSize));
+
+            //Read the blob
+            std::vector<uint8_t> buffer(docSize);
+            file.read(reinterpret_cast<char*>(buffer.data()), docSize);
+
+            // Deserialize
+            fluxdb::Deserializer reader(buffer);
+            fluxdb::Document doc = reader.deserialize();
+
+            // ** using insert method so indexes get rebuilt (addDocument method)
+            this->insert(id, std::move(doc));
+        }
+
+        std::cout << "[Snapshot] Loaded " << count << " documents.\n";
     }
     
     void printDoc(Id id) const {
