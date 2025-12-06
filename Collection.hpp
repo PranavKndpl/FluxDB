@@ -18,6 +18,22 @@ private:
 
     fluxdb::Serializer serializer;
 
+    //consolidate Memory to Disk and wipe the Log
+    void checkpoint() {
+        std::cout << "[Checkpoint] Starting...\n";
+
+        save("snapshot.flux");
+
+        wal_file.close();
+
+        wal_file.open("wal.log", std::ios::binary | std::ios::out | std::ios::trunc); // trunc mode to wipe the logs
+
+        wal_file.close();
+        wal_file.open("wal.log", std::ios::binary | std::ios::app);
+
+        std::cout << "[Checkpoint] Complete. WAL truncated.\n";
+    }
+
     void logOperation(uint8_t opCode, Id id, const std::vector<uint8_t>& data = {}) {
         if (!wal_file.is_open()) return;
 
@@ -35,10 +51,28 @@ private:
     }
 
     void recover() {
+
+        // PHASE 1: Load Snapshot (The Base State)
+        std::ifstream snapshot("snapshot.flux", std::ios::binary);
+        if (snapshot.is_open()) {
+            std::cout << "[Recovery] Found snapshot. Loading...\n";
+            snapshot.close(); // Close so load() can open it
+            load("snapshot.flux"); 
+        } else {
+            std::cout << "[Recovery] No snapshot found. Starting fresh.\n";
+        }
+
+        // PHASE 2: Replay WAL (The Recent History)
         std::ifstream file("wal.log", std::ios::binary);
         if (!file.is_open()) return; 
 
-        std::cout << "[Recovery] Starting WAL replay...\n";
+        // Check if file is empty
+        if (file.peek() == EOF) {
+            std::cout << "[Recovery] WAL is empty. Ready.\n";
+            return;
+        }
+
+        std::cout << "[Recovery] Replaying WAL...\n";
         int count = 0;
 
         while (file.peek() != EOF) {
@@ -58,18 +92,16 @@ private:
                 fluxdb::Deserializer reader(buffer);
                 fluxdb::Document doc = reader.deserialize();
 
-                // SILENT INSERT (RAM + Index only)
-                // Check if this is an overwrite (Update)
                 auto it = db.find(id);
                 if (it != db.end()) {
-                    // It's an update: Clean up old index first
+                    // update
                     indexer.removeDocument(id, it->second);
                     it->second = doc; // Overwrite data
                 } else {
-                    // It's a new insert
+                    // new insert
                     db.emplace(id, doc);
                 }
-                // Update index with new data
+                // Update index 
                 indexer.addDocument(id, doc);
 
             } else if (opCode == 0x02) { // DELETE
