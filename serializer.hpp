@@ -38,34 +38,31 @@ public:
         writeBytes(s.data(), len); // string data
     }
 
-    std::vector<uint8_t> serialize(const Document& doc) {
-        buffer.clear();
-        
-        // number of entries tp read
+    void writeDocumentMap(const Document& doc) {
         uint32_t count = static_cast<uint32_t>(doc.size());
         writeBytes(&count, sizeof(count));
 
-        for (const auto& [key, valPtr] : doc) { // *** doc[key] is a pointer to a Value std::shared_ptr<Value>
-            // 1. Write Key
-            writeString(key);
-
-            // 2. Write Type
+        for (const auto& [key, valPtr] : doc) {
+            writeString(key);          
+            
             const Value& v = *valPtr;
-            // Cast enum to uint8_t
-            writeByte(static_cast<uint8_t>(v.type)); // enum to byte
+            writeByte(static_cast<uint8_t>(v.type)); 
 
-            // 3. Write Value
             switch (v.type) {
                 case Type::Int:    writeInt64(v.asInt()); break;
                 case Type::Double: writeDouble(v.asDouble()); break;
                 case Type::Bool:   writeByte(v.asBool() ? 1 : 0); break;
                 case Type::String: writeString(v.asString()); break;
                 case Type::Object: 
-                    // later
+                    writeDocumentMap(v.asObject()); // recursive call
                     break; 
             }
         }
+    }
 
+    std::vector<uint8_t> serialize(const Document& doc) {
+        buffer.clear();
+        writeDocumentMap(doc);
         return buffer;
     }
 
@@ -121,40 +118,36 @@ public:
         return s;
     }
 
-
-    Document deserialize() {
+    Document readDocumentMap() {
         Document doc;
-        
-        // 1. Read Count
+
         uint32_t count = readRaw<uint32_t>();
 
         for (uint32_t i = 0; i < count; ++i) {
-            // A. Read Key
             std::string key = readString();
-
-            // B. Read Type
             Type type = static_cast<Type>(readByte());
 
-            // C. Read Value
             switch (type) {
-                case Type::Int:
-                    doc[key] = std::make_shared<Value>(readInt64());
-                    break;
-                case Type::Double:
-                    doc[key] = std::make_shared<Value>(readDouble());
-                    break;
-                case Type::Bool:
-                    doc[key] = std::make_shared<Value>(readByte() != 0);
-                    break;
-                case Type::String:
-                    doc[key] = std::make_shared<Value>(readString());
-                    break;
+                case Type::Int:    
+                    doc[key] = std::make_shared<Value>(readInt64()); break;
+                case Type::Double: 
+                    doc[key] = std::make_shared<Value>(readDouble()); break;
+                case Type::Bool:   
+                    doc[key] = std::make_shared<Value>(readByte() != 0); break;
+                case Type::String: 
+                    doc[key] = std::make_shared<Value>(readString()); break;
+                
                 case Type::Object:
-                    //recursion later
+                    // read the inner map, wrap it in a Value, and store it
+                    doc[key] = std::make_shared<Value>(readDocumentMap());
                     break; 
             }
         }
         return doc;
+    }
+
+    Document deserialize() {
+        return readDocumentMap();
     }
     
     static Document loadFromFile(const std::string& filename) {
