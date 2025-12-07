@@ -56,7 +56,7 @@ struct Value{
     Value(const Array& v) : type(Type::Array), data(v) {}
     Value(Array&& v)      : type(Type::Array), data(std::move(v)) {}
 
-    template<typename Fn, typename = std::enable_if_t<std::is_invocable_v<Fn, Document&>>>
+    template<typename Fn, typename = std::enable_if_t<std::is_invocable_v<Fn, Document&>>> //SFINAE
     static Document make_document(Fn f) {
         Document d;
         f(d);
