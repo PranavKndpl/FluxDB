@@ -7,13 +7,12 @@
 #include "serializer.hpp"
 #include <fstream>
 
-#include<mutex>
-#include<shared_mutex>
-#include<condition_variable>
+#include <mutex>
+#include <shared_mutex>
+#include <condition_variable>
 #include <thread>
 #include <atomic>
 #include <chrono>
-
 
 using Id = std::uint64_t;
 
@@ -30,123 +29,11 @@ private:
     std::thread janitor_thread; 
     std::condition_variable cv;
     std::mutex cv_m;      
-    std::atomic<bool> running{true};  // Flag 
-    const size_t MAX_WAL_SIZE = 100 ; // 10 MB limit
+    std::atomic<bool> running{true};  
+    const size_t MAX_WAL_SIZE = 10 * 1024 * 1024; // 10 MB limit (Corrected from 100)
 
-    void logOperation(uint8_t opCode, Id id, const std::vector<uint8_t>& data = {}) {
-        if (!wal_file.is_open()) return;
+    // --- INTERNAL HELPERS (No Locks) ---
 
-        wal_file.put(static_cast<char>(opCode));
-
-        wal_file.write(reinterpret_cast<const char*>(&id), sizeof(id));
-
-        if (opCode == 0x01) {
-            uint32_t size = static_cast<uint32_t>(data.size());
-            wal_file.write(reinterpret_cast<const char*>(&size), sizeof(size));
-            wal_file.write(reinterpret_cast<const char*>(data.data()), size);
-        }
-
-        wal_file.flush(); // immediate write from buffer
-    }
-
-    void recover() {
-        std::unique_lock lock(rw_lock);
-
-        // PHASE 1: Load Snapshot (The Base State)
-        std::cout << "[Recovery] Checking for snapshot...\n";
-        
-        std::ifstream snapshot("snapshot.flux", std::ios::binary);
-        if (snapshot.is_open()) {
-            std::cout << "[Recovery] Found snapshot. Loading...\n";
-            snapshot.close(); // Close so load() can open it
-            load_internal("snapshot.flux"); 
-        } else {
-            std::cout << "[Recovery] No snapshot found. Starting fresh.\n";
-        }
-
-        // PHASE 2: Replay WAL (The Recent History)
-        std::ifstream file("wal.log", std::ios::binary);
-        if (!file.is_open()) return; 
-
-        // Check if file is empty
-        if (file.peek() == EOF) {
-            std::cout << "[Recovery] WAL is empty. Ready.\n";
-            return;
-        }
-
-        std::cout << "[Recovery] Replaying WAL...\n";
-        int count = 0;
-
-        while (file.peek() != EOF) {
-            char opCode;
-            file.get(opCode);
-
-            Id id;
-            file.read(reinterpret_cast<char*>(&id), sizeof(id));
-
-            if (id >= next_id) {
-                next_id = id + 1;
-            }
-
-            if (opCode == 0x01) { // INSERT / UPDATE
-                uint32_t size;
-                file.read(reinterpret_cast<char*>(&size), sizeof(size));
-
-                std::vector<uint8_t> buffer(size);
-                file.read(reinterpret_cast<char*>(buffer.data()), size);
-
-                fluxdb::Deserializer reader(buffer);
-                fluxdb::Document doc = reader.deserialize();
-
-                auto it = db.find(id);
-                if (it != db.end()) {
-                    // update
-                    indexer.removeDocument(id, it->second);
-                    it->second = doc; // Overwrite data
-                } else {
-                    // new insert
-                    db.emplace(id, doc);
-                }
-                // Update index 
-                indexer.addDocument(id, doc);
-
-            } else if (opCode == 0x02) { // DELETE
-                // SILENT DELETE
-                auto it = db.find(id);
-                if (it != db.end()) {
-                    indexer.removeDocument(id, it->second);
-                    db.erase(it);
-                }
-            }
-            count++;
-        }
-
-        std::cout << "[Recovery] Replayed " << count << " operations.\n";
-    }
-
-    void janitorTask() {
-        while (running) {
-            // Smart Sleep: Waits 5s OR until notified
-            std::unique_lock<std::mutex> lk(cv_m);
-            if (cv.wait_for(lk, std::chrono::seconds(5), [this]{ return !running; })) {
-                break; // Woke up because running == false
-            }
-
-            long size = 0;
-            {   // Use unique_lock because tellp() on a writing stream isn't thread-safe
-                std::unique_lock lock(rw_lock); 
-                size = wal_file.tellp();
-            } // Lock releases here
-
-
-            if (size > MAX_WAL_SIZE) {
-                std::cout << "[Janitor] WAL is " << size << " bytes. Compacting...\n";
-                checkpoint(); // checkpoint() handles its own locking, so we call it directly
-            }
-        }
-    }
-
-    // No Locks Here
     void insert_internal(Id id, const fluxdb::Document& doc) {
         // Log to WAL
         std::vector<uint8_t> serializedDoc = serializer.serialize(doc);
@@ -172,11 +59,36 @@ private:
         if (it == db.end()) return false;
 
         indexer.removeDocument(id, it->second);
-    
         it->second = doc; 
-        
         indexer.addDocument(id, doc);
         return true;
+    }
+
+    // Added this helper to fix duplication in recover() and removeById()
+    bool remove_internal(Id id) {
+        auto it = db.find(id);
+        if (it == db.end()) return false;
+
+        indexer.removeDocument(id, it->second);
+        db.erase(it);
+        return true;
+    }
+
+    // --- PERSISTENCE HELPERS ---
+
+    void logOperation(uint8_t opCode, Id id, const std::vector<uint8_t>& data = {}) {
+        if (!wal_file.is_open()) return;
+
+        wal_file.put(static_cast<char>(opCode));
+        wal_file.write(reinterpret_cast<const char*>(&id), sizeof(id));
+
+        if (opCode == 0x01) {
+            uint32_t size = static_cast<uint32_t>(data.size());
+            wal_file.write(reinterpret_cast<const char*>(&size), sizeof(size));
+            wal_file.write(reinterpret_cast<const char*>(data.data()), size);
+        }
+
+        wal_file.flush(); 
     }
 
     void save_internal(const std::string& filename) {
@@ -185,25 +97,21 @@ private:
         std::ofstream file(filename, std::ios::binary | std::ios::out);
         if (!file.is_open()) throw std::runtime_error("Cannot open file: " + filename);
 
+        // 1. Write Next ID
         file.write(reinterpret_cast<const char*>(&next_id), sizeof(next_id));
 
-        //Write Count of documents
+        // 2. Write Count
         uint64_t count = db.size();
         file.write(reinterpret_cast<const char*>(&count), sizeof(count));
 
-        //Write each Document
+        // 3. Write Documents
         for (const auto& [id, doc] : db) {
-            // Serialize the doc
             std::vector<uint8_t> bytes = writer.serialize(doc);
             
-            //Write ID (So we keep the same ID)
             file.write(reinterpret_cast<const char*>(&id), sizeof(id));
             
-            // Write Size of this doc's binary blob
             uint32_t docSize = static_cast<uint32_t>(bytes.size());
             file.write(reinterpret_cast<const char*>(&docSize), sizeof(docSize));
-            
-            // Write the blob
             file.write(reinterpret_cast<const char*>(bytes.data()), docSize);
         }
         
@@ -217,42 +125,118 @@ private:
         db.clear();
         indexer.clear();
 
+        // 1. Read Next ID (FIXED: Order matched save_internal)
+        file.read(reinterpret_cast<char*>(&next_id), sizeof(next_id));
+
+        // 2. Read Count
         uint64_t count = 0;
         file.read(reinterpret_cast<char*>(&count), sizeof(count));
         
-        // Read Next ID 
-        file.read(reinterpret_cast<char*>(&next_id), sizeof(next_id));
-
-        // Load Loop
+        // 3. Load Loop
         for (uint64_t i = 0; i < count; ++i) {
             Id id;
             file.read(reinterpret_cast<char*>(&id), sizeof(id));
 
-            uint32_t size; //docSize
+            uint32_t size; 
             file.read(reinterpret_cast<char*>(&size), sizeof(size));
 
-            //read blob
             std::vector<uint8_t> buffer(size);
             file.read(reinterpret_cast<char*>(buffer.data()), size);
 
             fluxdb::Deserializer reader(buffer);
             fluxdb::Document doc = reader.deserialize();
 
-            // DIRECT INSERTION (Avoids Locks & Logging)
-            indexer.addDocument(id, doc); //using insert method so indexes get rebuilt (addDocument method)
+            // Direct insertion (No Lock, No Log)
+            indexer.addDocument(id, doc); 
             db.emplace(id, std::move(doc));
         }
         
         std::cout << "[Snapshot] Loaded " << count << " documents.\n";
     }
 
+    void recover() {
+        // NOTE: This runs in constructor, so locks aren't strictly needed 
+        // unless you allow multi-threaded startup. Keeping it simple.
 
+        // PHASE 1: Load Snapshot
+        std::cout << "[Recovery] Checking for snapshot...\n";
+        load_internal("snapshot.flux"); 
+
+        // PHASE 2: Replay WAL
+        std::ifstream file("wal.log", std::ios::binary);
+        if (!file.is_open()) return; 
+
+        if (file.peek() == EOF) {
+            std::cout << "[Recovery] WAL is empty. Ready.\n";
+            return;
+        }
+
+        std::cout << "[Recovery] Replaying WAL...\n";
+        int count = 0;
+
+        while (file.peek() != EOF) {
+            char opCode;
+            file.get(opCode); // Read 1 byte
+
+            if (file.eof()) break; // Safety check
+
+            Id id;
+            file.read(reinterpret_cast<char*>(&id), sizeof(id));
+
+            if (id >= next_id) {
+                next_id = id + 1;
+            }
+
+            if (opCode == 0x01) { // INSERT / UPDATE
+                uint32_t size;
+                file.read(reinterpret_cast<char*>(&size), sizeof(size));
+
+                std::vector<uint8_t> buffer(size);
+                file.read(reinterpret_cast<char*>(buffer.data()), size);
+
+                fluxdb::Deserializer reader(buffer);
+                fluxdb::Document doc = reader.deserialize();
+
+                // Logic: If exists -> Update, Else -> Insert
+                if (db.count(id)) {
+                    update_internal(id, doc);
+                } else {
+                    insert_internal(id, std::move(doc));
+                }
+
+            } else if (opCode == 0x02) { // DELETE
+                remove_internal(id);
+            }
+            count++;
+        }
+
+        std::cout << "[Recovery] Replayed " << count << " operations.\n";
+    }
+
+    void janitorTask() {
+        while (running) {
+            std::unique_lock<std::mutex> lk(cv_m);
+            if (cv.wait_for(lk, std::chrono::seconds(5), [this]{ return !running; })) {
+                break; 
+            }
+
+            long size = 0;
+            {   
+                std::shared_lock lock(rw_lock); // Shared lock is enough to read position
+                size = wal_file.tellp();
+            } 
+
+            if (size > MAX_WAL_SIZE) {
+                std::cout << "[Janitor] WAL is " << size << " bytes. Compacting...\n";
+                checkpoint(); 
+            }
+        }
+    }
 
 public:
     Collection() {
         recover();
         wal_file.open("wal.log", std::ios::binary | std::ios::app);
-
         janitor_thread = std::thread(&Collection::janitorTask, this);
     }
 
@@ -260,17 +244,15 @@ public:
         recover();
         db.reserve(capacity_hint);
         wal_file.open("wal.log", std::ios::binary | std::ios::app);
-
         janitor_thread = std::thread(&Collection::janitorTask, this);
     }
 
     ~Collection() {
         running = false;
-        cv.notify_all(); // WAKE UP!
-        if (janitor_thread.joinable()) janitor_thread.join(); // join to let it finish the task first
+        cv.notify_all(); 
+        if (janitor_thread.joinable()) janitor_thread.join();
     }
 
-    //consolidate Memory to Disk and wipe the Log
     void checkpoint() {
         std::unique_lock lock(rw_lock);
         std::cout << "[Checkpoint] Starting...\n";
@@ -278,28 +260,25 @@ public:
         save_internal("snapshot.flux");
 
         wal_file.close();
-
-        wal_file.open("wal.log", std::ios::binary | std::ios::out | std::ios::trunc); // trunc mode to wipe the logs
-
+        wal_file.open("wal.log", std::ios::binary | std::ios::out | std::ios::trunc);
         wal_file.close();
         wal_file.open("wal.log", std::ios::binary | std::ios::app);
 
         std::cout << "[Checkpoint] Complete. WAL truncated.\n";
     }
 
-   // Manual ID (Copy)
-   void insert(Id id, const fluxdb::Document& doc) {
+    // --- PUBLIC API ---
+
+    void insert(Id id, const fluxdb::Document& doc) {
         std::unique_lock lock(rw_lock); 
         insert_internal(id, doc);       
     }
 
-    // Manual ID (Move)
     void insert(Id id, fluxdb::Document&& doc) {
         std::unique_lock lock(rw_lock);
         insert_internal(id, std::move(doc));
     }
 
-    // Auto-ID (Copy)
     Id insert(const fluxdb::Document& doc) {
         std::unique_lock lock(rw_lock); 
         Id id = next_id++;              
@@ -307,7 +286,6 @@ public:
         return id;
     }
 
-    // Auto-ID (Move)
     Id insert(fluxdb::Document&& doc) {
         std::unique_lock lock(rw_lock);
         Id id = next_id++;
@@ -316,42 +294,43 @@ public:
     }
 
     std::optional<std::reference_wrapper<const fluxdb::Document>> getById(Id id) const {
-        std::shared_lock lock(rw_lock); // Allows multiple readers
-
+        std::shared_lock lock(rw_lock); 
         auto it = db.find(id);
-        if (it != db.end())
-            return it->second;  // returns reference_wrapper<const Document>
+        if (it != db.end()) return it->second;
         return std::nullopt;
     }
 
     bool update(Id id, const fluxdb::Document& doc) {
         std::unique_lock lock(rw_lock); 
 
+        // 1. Check existence first
         if (db.find(id) == db.end()) return false;
 
+        // 2. Log (WAL First)
         std::vector<uint8_t> serializedDoc = serializer.serialize(doc);
         logOperation(0x01, id, serializedDoc);
 
+        // 3. Update RAM
         update_internal(id, doc);
-
         return true;
     }
 
     bool removeById(Id id) {
         std::unique_lock lock(rw_lock);
+        
+        // 1. Check existence
+        if (db.find(id) == db.end()) return false; 
 
-        auto it = db.find(id);
-        if (it == db.end()) return false; 
-
+        // 2. Log (WAL First)
         logOperation(0x02, id);
-        indexer.removeDocument(id, it->second);
-
-        db.erase(it);
+        
+        // 3. Update RAM
+        remove_internal(id);
         return true;
     }
 
     void createIndex(const std::string& field, int type = 0) {
-        std::unique_lock lock(rw_lock);
+        std::unique_lock lock(rw_lock); // Writes to index structure
         indexer.createIndex(field, type);
     }
 
@@ -365,32 +344,26 @@ public:
         return indexer.searchSorted(field, min, max);
     }
 
-// ---------------------------------------------------------
-// PERSISTENCE (Snapshots)
-
+    // Exposed save/load just in case user wants manual snapshots
     void save(const std::string& filename) {
         std::shared_lock lock(rw_lock);
         save_internal(filename);
     }
 
-    // Load state from disk 
     void load(const std::string& filename) {
-        std::unique_lock lock(rw_lock); 
+        std::unique_lock lock(rw_lock);
         load_internal(filename);       
     }
     
     void printDoc(Id id) const {
         std::shared_lock lock(rw_lock);
-
         auto it = db.find(id);
         if (it == db.end()) {
             std::cout << "Doc " << id << " not found.\n";
             return;
         }
-
         std::cout << "Doc " << id << ": { ";
         for (const auto& [key, valPtr] : it->second) {
-            // valPtr is a shared_ptr, so we dereference it (*valPtr)
             std::cout << key << ": " << valPtr->ToString() << ", ";
         }
         std::cout << "}\n";
