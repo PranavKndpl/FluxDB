@@ -10,28 +10,65 @@ namespace fluxdb {
 
 class QueryProcessor {
 private:
-    Collection& db; 
+    Collection& db;
+
+    bool checkCondition(const Value& val, const Value& constraint) {
+        if (constraint.type != Type::Object) {
+            return val == constraint;
+        }
+
+        const Document& ops = constraint.asObject();
+        bool match = true;
+
+        for (const auto& [op, criterion] : ops) {
+            if (!criterion) continue;
+            const Value& crit = *criterion;
+
+            if (op == "$gt") {
+                if (!(val > crit)) match = false;
+            } 
+            else if (op == "$lt") {
+                if (!(val < crit)) match = false;
+            } 
+            else if (op == "$gte") {
+                if (!(val >= crit)) match = false;
+            } 
+            else if (op == "$lte") {
+                if (!(val <= crit)) match = false;
+            } 
+            else if (op == "$ne") {
+                if (val == crit) match = false;
+            }
+        }
+        return match;
+    }
+
+    bool matches(const Document& doc, const Document& query) {
+        for (const auto& [key, constraint] : query) {
+            if (!constraint) continue;
+
+            auto it = doc.find(key);
+
+            if (it == doc.end()) return false; 
+
+            if (!checkCondition(*it->second, *constraint)) {
+                return false;
+            }
+        }
+        return true;
+    }
 
 public:
     QueryProcessor(Collection& database) : db(database) {}
 
     std::string process(const std::string& request) {
         try {
-            if (request.rfind("INSERT ", 0) == 0) {
-                return handleInsert(request.substr(7));
-            } 
-            else if (request.rfind("FIND ", 0) == 0) {
-                return handleFind(request.substr(5));
-            }
-            else if (request.rfind("DELETE ", 0) == 0) {
-                return handleDelete(request.substr(7));
-            }
-            else if (request.rfind("UPDATE ", 0) == 0) {
-                return handleUpdate(request.substr(7));
-            }
-            else if (request.rfind("INDEX ", 0) == 0) {
-                return handleIndex(request.substr(6));
-            }
+            if (request.rfind("INSERT ", 0) == 0)      return handleInsert(request.substr(7));
+            else if (request.rfind("FIND ", 0) == 0)   return handleFind(request.substr(5));
+            else if (request.rfind("DELETE ", 0) == 0) return handleDelete(request.substr(7));
+            else if (request.rfind("UPDATE ", 0) == 0) return handleUpdate(request.substr(7));
+            else if (request.rfind("INDEX ", 0) == 0)  return handleIndex(request.substr(6));
+            
             else if (request.rfind("CHECKPOINT", 0) == 0) {
                 db.checkpoint();
                 return "OK CHECKPOINT_COMPLETE\n";
@@ -39,6 +76,12 @@ public:
             else if (request.rfind("FLUSHDB", 0) == 0) {
                 db.clear(); 
                 return "OK FLUSHED\n";
+            }
+            else if (request == "GET") {
+                return handleGet("");
+            }
+            else if (request.rfind("GET ", 0) == 0) {
+                return handleGet(request.substr(4));
             }
             
             return "UNKNOWN_COMMAND\n";
@@ -63,41 +106,33 @@ private:
         
         if (query.empty()) return "ERROR EMPTY_QUERY\n";
 
-        auto it = query.begin();
-        std::string field = it->first;
-        std::shared_ptr<Value> val = it->second;
-
         std::vector<Id> ids;
+        bool usedIndex = false;
 
-        if (val->type == Type::Object) {
-            const Document& ops = val->asObject();
+        if (query.size() == 1) {
+            auto it = query.begin();
+            std::string field = it->first;
             
-            Value minVal(static_cast<int64_t>(-9999999)); 
-            Value maxVal(static_cast<int64_t>(9999999));  
-            
-            bool isRange = false;
-
-            if (ops.count("$gt")) {
-                minVal = *ops.at("$gt");
-                isRange = true;
+            if (it->second->type != Type::Object) {
+                 ids = db.find(field, *it->second);
+                 if (!ids.empty()) usedIndex = true;
             }
-            if (ops.count("$lt")) {
-                maxVal = *ops.at("$lt");
-                isRange = true;
-            }
-
-            if (isRange) {
-                ids = db.findRange(field, minVal, maxVal);
-            } else {
-                ids = db.find(field, *val);
-            }
-        } 
-        else {
-            ids = db.find(field, *val);
         }
-        
+
+        if (!usedIndex) {
+            ids = db.findAll([this, &query](const Document& doc) {
+                return this->matches(doc, query);
+            });
+        }
+
         std::string response = "OK COUNT=" + std::to_string(ids.size()) + "\n";
-        for(Id id : ids) response += "ID " + std::to_string(id) + "\n";
+        for(Id id : ids) {
+            auto res = db.getById(id);
+            if (res) {
+                Value temp(res->get());
+                response += "ID " + std::to_string(id) + " " + temp.ToJson() + "\n"; 
+            }
+        }
         return response;
     }
 
@@ -141,6 +176,58 @@ private:
             db.createIndex(field, 0);
         }
         return "OK INDEX_CREATED\n";
+    }
+
+    std::string handleGet(const std::string& args) {
+        if (args.empty()) {
+             std::vector<Id> allIds = db.findAll([](const Document&){ return true; });
+             
+             std::string response = "OK COUNT=" + std::to_string(allIds.size()) + "\n";
+             for(Id id : allIds) {
+                 auto res = db.getById(id);
+                 if (res) {
+                     Value temp(res->get());
+                     response += "ID " + std::to_string(id) + " " + temp.ToJson() + "\n";
+                 }
+             }
+             return response;
+        }
+
+        size_t dashPos = args.find('-');
+        if (dashPos != std::string::npos) {
+            try {
+                Id start = std::stoull(args.substr(0, dashPos));
+                Id end   = std::stoull(args.substr(dashPos + 1));
+                
+                std::string response;
+                int count = 0;
+                
+                for (Id i = start; i <= end; ++i) {
+                     auto res = db.getById(i);
+                     if (res) {
+                         Value temp(res->get());
+                         response += "ID " + std::to_string(i) + " " + temp.ToJson() + "\n";
+                         count++;
+                     }
+                }
+                return "OK COUNT=" + std::to_string(count) + "\n" + response;
+            } catch (...) {
+                return "ERROR INVALID_RANGE\n";
+            }
+        }
+
+        try {
+            Id id = std::stoull(args);
+            auto result = db.getById(id); 
+            if (result) {
+                Value tempVal(result->get());
+                return "OK " + tempVal.ToJson() + "\n";
+            } else {
+                return "ERROR NOT_FOUND\n";
+            }
+        } catch (...) {
+            return "ERROR INVALID_ID\n";
+        }
     }
 };
 

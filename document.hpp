@@ -122,19 +122,47 @@ struct Value{
     }
 
 
-    std::string ToString() const {
-        switch(type) {
+    // Recursive JSON Serializer
+    std::string ToJson() const {
+        switch (type) {
             case Type::Int:    return std::to_string(std::get<int64_t>(data));
             case Type::Double: {
                 std::ostringstream oss;
-                oss << std::fixed << std::setprecision(6);
-                oss << std::get<double>(data);
-                return oss.str();
+                oss << std::fixed << std::setprecision(6) << std::get<double>(data);
+                // Remove trailing zeros for cleaner JSON
+                std::string s = oss.str();
+                s.erase(s.find_last_not_of('0') + 1, std::string::npos); 
+                if (s.back() == '.') s.pop_back();
+                return s;
             }
             case Type::Bool:   return std::get<bool>(data) ? "true" : "false";
-            case Type::String: return std::get<std::string>(data);
-            case Type::Object: return "{...}";
-            default: return "UNKNOWN";
+            case Type::String: return "\"" + std::get<std::string>(data) + "\"";
+            
+            case Type::Array: {
+                const auto& arr = std::get<Array>(data);
+                std::string json = "[";
+                for (size_t i = 0; i < arr.size(); ++i) {
+                    json += arr[i]->ToJson(); // Recursion!
+                    if (i < arr.size() - 1) json += ", ";
+                }
+                json += "]";
+                return json;
+            }
+
+            case Type::Object: {
+                const auto& doc = std::get<Document>(data);
+                std::string json = "{";
+                size_t i = 0;
+                for (const auto& [key, valPtr] : doc) {
+                    json += "\"" + key + "\": " + valPtr->ToJson(); // Recursion!
+                    if (i < doc.size() - 1) json += ", ";
+                    i++;
+                }
+                json += "}";
+                return json;
+            }
+            
+            default: return "null";
         }
     }
 
@@ -152,6 +180,12 @@ struct Value{
             default: return false;
         }
     }
+
+    bool operator<(const Value& other) const;
+    bool operator>(const Value& other) const;
+    bool operator<=(const Value& other) const;
+    bool operator>=(const Value& other) const;
+    bool operator!=(const Value& other) const;
 
 };
 
@@ -197,6 +231,27 @@ struct ValueHasher {
         return h ^ (d_hash + 0x9e3779b9 + (h << 6) + (h >> 2)); 
     }
 };
+
+inline bool Value::operator<(const Value& other) const {
+    return ValueLess()(*this, other);
+}
+
+inline bool Value::operator>(const Value& other) const {
+    return ValueLess()(other, *this);
+}
+
+inline bool Value::operator<=(const Value& other) const {
+    return !(*this > other);
+}
+
+inline bool Value::operator>=(const Value& other) const {
+    return !(*this < other);
+}
+
+inline bool Value::operator!=(const Value& other) const {
+    return !(*this == other);
+}
+
 
 }
 

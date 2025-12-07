@@ -358,7 +358,19 @@ public:
         return indexer.searchSorted(field, min, max);
     }
 
-    // Exposed save/load just in case user wants manual snapshots
+    std::vector<Id> findAll(std::function<bool(const fluxdb::Document&)> predicate) {
+        std::shared_lock lock(rw_lock); 
+        std::vector<Id> results;
+        results.reserve(db.size() / 4); 
+
+        for (const auto& [id, doc] : db) {
+            if (predicate(doc)) {
+                results.push_back(id);
+            }
+        }
+        return results;
+    }
+
     void save(const std::string& filename) {
         std::shared_lock lock(rw_lock);
         save_internal(filename);
@@ -384,17 +396,4 @@ public:
         wal_file.open("wal.log", std::ios::binary | std::ios::app);
     }
     
-    void printDoc(Id id) const {
-        std::shared_lock lock(rw_lock);
-        auto it = db.find(id);
-        if (it == db.end()) {
-            std::cout << "Doc " << id << " not found.\n";
-            return;
-        }
-        std::cout << "Doc " << id << ": { ";
-        for (const auto& [key, valPtr] : it->second) {
-            std::cout << key << ": " << valPtr->ToString() << ", ";
-        }
-        std::cout << "}\n";
-    }
 };
