@@ -368,6 +368,21 @@ public:
         std::unique_lock lock(rw_lock);
         load_internal(filename);       
     }
+
+    void clear() {
+        std::unique_lock lock(rw_lock);
+        
+        db.clear();
+        indexer.clear();
+        
+        std::cout << "[Maintenance] DB Flushed.\n";
+        
+        save_internal("snapshot.flux"); 
+        wal_file.close();
+        wal_file.open("wal.log", std::ios::binary | std::ios::out | std::ios::trunc);
+        wal_file.close();
+        wal_file.open("wal.log", std::ios::binary | std::ios::app);
+    }
     
     void printDoc(Id id) const {
         std::shared_lock lock(rw_lock);

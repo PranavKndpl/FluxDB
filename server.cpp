@@ -2,44 +2,89 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <thread>
+#include <atomic>
+#include <vector>
+
 #include "query_processor.hpp"
 
 #pragma comment(lib, "Ws2_32.lib")
 
 using namespace fluxdb;
 
-Collection db; // global instance is fine, its now thread safe
+Collection* db_ptr = nullptr;
+SOCKET serverSocket = INVALID_SOCKET;
+std::atomic<bool> is_running{true};
+
+BOOL WINAPI ConsoleHandler(DWORD signal) {
+    if (signal == CTRL_C_EVENT || signal == CTRL_CLOSE_EVENT) {
+        std::cout << "\n[Server] Shutdown signal received. Cleaning up...\n";
+        is_running = false;
+        
+        if (serverSocket != INVALID_SOCKET) {
+            closesocket(serverSocket);
+            serverSocket = INVALID_SOCKET;
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
 
 void handle_client(SOCKET clientSocket) {
-    QueryProcessor processor(db); 
+    if (!db_ptr) { closesocket(clientSocket); return; }
+
+    QueryProcessor processor(*db_ptr); 
+    
+    DWORD timeout = 5000;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+
+    std::string accumulator = ""; 
     char buffer[4096];
     
-    while (true) {
-        int bytes = recv(clientSocket, buffer, 4096, 0);
-        if (bytes <= 0) break; 
-        std::string request(buffer, bytes);
-        std::string response = processor.process(request);
+    while (is_running) {
+        int bytes = recv(clientSocket, buffer, sizeof(buffer), 0);
+        
+        if (bytes == SOCKET_ERROR) {
+            if (WSAGetLastError() == WSAETIMEDOUT) continue; 
+        }
+        if (bytes == 0) break; 
 
-        send(clientSocket, response.c_str(), response.size(), 0);
+        accumulator.append(buffer, bytes);
+
+        size_t pos = 0;
+        while ((pos = accumulator.find('\n')) != std::string::npos) {
+
+            std::string command = accumulator.substr(0, pos);
+            
+            accumulator.erase(0, pos + 1);
+
+            if (!command.empty() && command.back() == '\r') command.pop_back();
+            if (command.empty()) continue;
+
+            std::string response;
+            try {
+                response = processor.process(command);
+            } catch (const std::exception& e) {
+                response = "ERROR INTERNAL\n";
+            }
+
+            send(clientSocket, response.c_str(), response.size(), 0);
+        }
     }
 
     closesocket(clientSocket);
 }
 
 int main() {
+    if (!SetConsoleCtrlHandler(ConsoleHandler, TRUE)) {
+        std::cerr << "Could not register signal handler.\n"; 
+        return 1;
+    }
 
     WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        std::cerr << "WSAStartup failed.\n";
-        return 1;
-    }
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) return 1;
 
-    SOCKET serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSocket == INVALID_SOCKET) {
-        std::cerr << "Socket creation failed.\n";
-        WSACleanup();
-        return 1;
-    }
+    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (serverSocket == INVALID_SOCKET) { WSACleanup(); return 1; }
 
     sockaddr_in serverAddr{};
     serverAddr.sin_family = AF_INET;
@@ -47,7 +92,7 @@ int main() {
     serverAddr.sin_port = htons(8080);
 
     if (bind(serverSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
-        std::cerr << "Bind failed.\n";
+        std::cerr << "Bind failed (Port in use?).\n";
         closesocket(serverSocket);
         WSACleanup();
         return 1;
@@ -55,25 +100,30 @@ int main() {
 
     if (listen(serverSocket, SOMAXCONN) == SOCKET_ERROR) {
         std::cerr << "Listen failed.\n";
-        closesocket(serverSocket);
-        WSACleanup();
         return 1;
     }
 
-    std::cout << "=== FluxDB Server Running on Port 8080 ===\n";
+    Collection db;
+    db_ptr = &db; 
 
-    while (true) {
-        SOCKET clientSocket = accept(serverSocket, nullptr, nullptr);
-        if (clientSocket == INVALID_SOCKET) {
-            std::cerr << "Accept failed, retrying...\n";
+    std::cout << "=== FluxDB Server Running ===\n";
+
+    while (is_running) {
+        SOCKET client = accept(serverSocket, nullptr, nullptr);
+        
+        if (client == INVALID_SOCKET) {
+            if (!is_running) break; 
             continue;
         }
 
-        // Spawn detached thread for concurrency
-        std::thread(handle_client, clientSocket).detach();
+        std::thread(handle_client, client).detach();
     }
 
-    closesocket(serverSocket);
+    std::cout << "[Server] Main loop finished.\n";
+
+    db_ptr = nullptr; 
+    
     WSACleanup();
+    std::cout << "[Server] Bye.\n";
     return 0;
 }

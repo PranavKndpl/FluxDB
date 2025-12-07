@@ -32,6 +32,14 @@ public:
             else if (request.rfind("INDEX ", 0) == 0) {
                 return handleIndex(request.substr(6));
             }
+            else if (request.rfind("CHECKPOINT", 0) == 0) {
+                db.checkpoint();
+                return "OK CHECKPOINT_COMPLETE\n";
+            }
+            else if (request.rfind("FLUSHDB", 0) == 0) {
+                db.clear(); 
+                return "OK FLUSHED\n";
+            }
             
             return "UNKNOWN_COMMAND\n";
 
@@ -53,15 +61,43 @@ private:
         QueryParser parser(json);
         Document query = parser.parseJSON();
         
-        auto it = query.begin();
-        if (it == query.end()) return "ERROR EMPTY_QUERY\n";
+        if (query.empty()) return "ERROR EMPTY_QUERY\n";
 
-        std::vector<Id> ids = db.find(it->first, *it->second);
+        auto it = query.begin();
+        std::string field = it->first;
+        std::shared_ptr<Value> val = it->second;
+
+        std::vector<Id> ids;
+
+        if (val->type == Type::Object) {
+            const Document& ops = val->asObject();
+            
+            Value minVal(static_cast<int64_t>(-9999999)); 
+            Value maxVal(static_cast<int64_t>(9999999));  
+            
+            bool isRange = false;
+
+            if (ops.count("$gt")) {
+                minVal = *ops.at("$gt");
+                isRange = true;
+            }
+            if (ops.count("$lt")) {
+                maxVal = *ops.at("$lt");
+                isRange = true;
+            }
+
+            if (isRange) {
+                ids = db.findRange(field, minVal, maxVal);
+            } else {
+                ids = db.find(field, *val);
+            }
+        } 
+        else {
+            ids = db.find(field, *val);
+        }
         
         std::string response = "OK COUNT=" + std::to_string(ids.size()) + "\n";
-        for(Id id : ids) {
-            response += "ID " + std::to_string(id) + "\n";
-        }
+        for(Id id : ids) response += "ID " + std::to_string(id) + "\n";
         return response;
     }
 

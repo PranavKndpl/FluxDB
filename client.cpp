@@ -23,8 +23,17 @@ void start_shell(SOCKET sock) {
         if (input == "EXIT" || input == "exit") break;
         if (input.empty()) continue;
 
-        send(sock, input.c_str(), input.size(), 0);
+        // --- THE FIX ---
+        // Protocol requires a newline delimiter
+        std::string command = input + "\n"; 
+        
+        int sendResult = send(sock, command.c_str(), command.size(), 0);
+        if (sendResult == SOCKET_ERROR) {
+            std::cerr << "Send failed.\n";
+            break;
+        }
 
+        // 2. Receive Response
         int bytes = recv(sock, buffer, 4096, 0);
         if (bytes <= 0) {
             std::cout << "Server disconnected.\n";
@@ -37,7 +46,6 @@ void start_shell(SOCKET sock) {
 }
 
 int main() {
-    // Init Winsock
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         std::cerr << "Startup Failed.\n";
@@ -47,17 +55,19 @@ int main() {
     SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) {
         std::cerr << "Socket creation failed.\n";
+        WSACleanup();
         return 1;
     }
 
-    // Connect
-    sockaddr_in serverAddr;
+    sockaddr_in serverAddr{};
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(PORT);
     inet_pton(AF_INET, SERVER_IP, &serverAddr.sin_addr);
 
     if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
         std::cerr << "Connection failed. Is the server running?\n";
+        closesocket(sock);
+        WSACleanup();
         return 1;
     }
 
