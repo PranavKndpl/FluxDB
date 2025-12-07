@@ -332,6 +332,20 @@ public:
     void createIndex(const std::string& field, int type = 0) {
         std::unique_lock lock(rw_lock); // Writes to index structure
         indexer.createIndex(field, type);
+
+        //backfill,Scan existing data
+        std::cout << "[Indexer] Backfilling index for '" << field << "'...\n";
+        int count = 0;
+        
+        for (const auto& [id, doc] : db) {
+
+            auto it = doc.find(field);
+            if (it != doc.end()) {
+                indexer.addToIndex(field, id, *it->second);
+                count++;
+            }
+        }
+        std::cout << "[Indexer] Backfill complete. Added " << count << " entries.\n";
     }
 
     std::vector<Id> find(const std::string& field, const fluxdb::Value& value) {

@@ -37,6 +37,16 @@ public:
         }
     }
 
+    void addToIndex(const std::string& field, uint64_t docId, const Value& val) {
+        if (auto it = sorted_indexes.find(field); it != sorted_indexes.end()) {
+            it->second.insert({ val, docId });
+        }
+
+        if (auto it = hash_indexes.find(field); it != hash_indexes.end()) {
+            it->second.insert({ val, docId });
+        }
+    }
+
     // Data Hooks 
     void addDocument(uint64_t docId, const Document& doc) {
         for (const auto& [key, valPtr] : doc) {
