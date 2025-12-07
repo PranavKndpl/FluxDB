@@ -30,7 +30,7 @@ private:
     std::condition_variable cv;
     std::mutex cv_m;      
     std::atomic<bool> running{true};  
-    const size_t MAX_WAL_SIZE = 10 * 1024 * 1024; // 10 MB limit (Corrected from 100)
+    const size_t MAX_WAL_SIZE = 10 * 1024 * 1024; // 10 MB limit
 
     // --- INTERNAL HELPERS (No Locks) ---
 
