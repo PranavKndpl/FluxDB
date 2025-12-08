@@ -83,6 +83,9 @@ public:
             else if (request.rfind("GET ", 0) == 0) {
                 return handleGet(request.substr(4));
             }
+            else if (request.rfind("CONFIG ", 0) == 0) {
+                return handleConfig(request.substr(7));
+            }
             
             return "UNKNOWN_COMMAND\n";
 
@@ -108,6 +111,11 @@ private:
 
         std::vector<Id> ids;
         bool usedIndex = false;
+        bool isRange = false;
+
+        if (query.begin()->second->type == Type::Object) {
+            isRange = true; 
+        }
 
         if (query.size() == 1) {
             auto it = query.begin();
@@ -115,7 +123,14 @@ private:
             
             if (it->second->type != Type::Object) {
                  ids = db.find(field, *it->second);
-                 if (!ids.empty()) usedIndex = true;
+                 
+                 if (!ids.empty()) {
+                     usedIndex = true;
+                 } 
+            }
+            
+            if (!usedIndex) {
+                db.reportQueryMiss(field, isRange);
             }
         }
 
@@ -126,6 +141,7 @@ private:
         }
 
         std::string response = "OK COUNT=" + std::to_string(ids.size()) + "\n";
+        
         for(Id id : ids) {
             auto res = db.getById(id);
             if (res) {
@@ -228,6 +244,22 @@ private:
         } catch (...) {
             return "ERROR INVALID_ID\n";
         }
+    }
+
+    std::string handleConfig(const std::string& args) {
+        // Usage: CONFIG ADAPTIVE 1
+        std::stringstream ss(args);
+        std::string param;
+        int value;
+        
+        ss >> param >> value;
+        
+        if (param == "ADAPTIVE") {
+            db.setAdaptive(value == 1);
+            return "OK CONFIG_UPDATED\n";
+        }
+        
+        return "ERROR UNKNOWN_CONFIG\n";
     }
 };
 

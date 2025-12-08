@@ -121,6 +121,10 @@ public:
         hash_indexes.clear();
     }
 
+    bool hasIndex(const std::string& field) const {
+        return hash_indexes.count(field) || sorted_indexes.count(field);
+    }
+
 private:
     template <typename MapType>
     void removeFromMultimap(MapType& index, const Value& val, uint64_t docId) {

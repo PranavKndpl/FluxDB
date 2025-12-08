@@ -32,6 +32,12 @@ private:
     std::atomic<bool> running{true};  
     const size_t MAX_WAL_SIZE = 10 * 1024 * 1024; // 10 MB limit
 
+
+    std::atomic<bool> adaptive_mode{false}; 
+    std::unordered_map<std::string, int> miss_counter;
+    std::unordered_map<std::string, bool> needs_sorted_index;
+    const int ADAPTIVE_THRESHOLD = 3;
+
     // --- INTERNAL HELPERS (No Locks) ---
 
     void insert_internal(Id id, const fluxdb::Document& doc) {
@@ -394,6 +400,51 @@ public:
         wal_file.open("wal.log", std::ios::binary | std::ios::out | std::ios::trunc);
         wal_file.close();
         wal_file.open("wal.log", std::ios::binary | std::ios::app);
+    }
+
+
+    void setAdaptive(bool enabled) {
+        adaptive_mode = enabled;
+        std::cout << "[Config] Adaptive Indexing set to " << (enabled ? "ON" : "OFF") << "\n";
+    }
+
+    // Called by QueryProcessor when a scan happens
+    void reportQueryMiss(const std::string& field, bool isRangeQuery) {
+        if (!adaptive_mode) return;
+        std::unique_lock lock(rw_lock); 
+
+        if (indexer.hasIndex(field)) return;
+
+        miss_counter[field]++;
+        
+        // If ANY query requested a range (>, <), mark this field as needing a Sorted Index
+        if (isRangeQuery) {
+            needs_sorted_index[field] = true;
+        }
+        
+        if (miss_counter[field] >= ADAPTIVE_THRESHOLD) {
+            int type = 0; 
+            if (needs_sorted_index[field]) {
+                type = 1; 
+                std::cout << "[Adaptive] Range query detected. Upgrading to SORTED index.\n";
+            }
+
+            std::cout << "[Adaptive] Hot field detected: '" << field << "'. Auto-creating index...\n";
+            
+            indexer.createIndex(field, type); // Create the correct type
+
+            // Backfill
+            for (const auto& [id, doc] : db) {
+                auto it = doc.find(field);
+                if (it != doc.end()) {
+                    indexer.addToIndex(field, id, *it->second);
+                }
+            }
+            
+            miss_counter[field] = 0;
+            needs_sorted_index[field] = false; // Reset
+            std::cout << "[Adaptive] Index built for '" << field << "'.\n";
+        }
     }
     
 };
