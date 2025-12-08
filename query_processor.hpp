@@ -89,6 +89,9 @@ public:
             else if (request == "STATS") {
                 return "OK " + db.getStats() + "\n";
             }
+            else if (request.rfind("EXPIRE ", 0) == 0) {
+                return handleExpire(request.substr(7));
+            }
             
             return "UNKNOWN_COMMAND\n";
 
@@ -263,6 +266,18 @@ private:
         }
         
         return "ERROR UNKNOWN_CONFIG\n";
+    }
+
+    std::string handleExpire(const std::string& args) {
+        std::stringstream ss(args);
+        Id id;
+        int seconds;
+        
+        if (ss >> id >> seconds) {
+            db.expire(id, seconds);
+            return "OK TTL_SET\n";
+        }
+        return "ERROR INVALID_ARGS\n";
     }
 };
 

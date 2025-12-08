@@ -16,6 +16,8 @@
 #include <atomic>
 #include <chrono>
 
+#include "expiry_manager.hpp"
+
 using Id = std::uint64_t;
 
 class Collection {
@@ -39,6 +41,9 @@ private:
     std::unordered_map<std::string, int> miss_counter;
     std::unordered_map<std::string, bool> needs_sorted_index;
     const int ADAPTIVE_THRESHOLD = 3;
+
+    fluxdb::ExpiryManager expiry_manager; 
+    std::thread ttl_thread;
 
     // --- INTERNAL HELPERS (No Locks) ---
 
@@ -163,14 +168,11 @@ private:
     }
 
     void recover() {
-        // NOTE: This runs in constructor, so locks aren't strictly needed 
-        // unless you allow multi-threaded startup. Keeping it simple.
-
-        // PHASE 1: Load Snapshot
+        // Load Snapshot
         std::cout << "[Recovery] Checking for snapshot...\n";
         load_internal("snapshot.flux"); 
 
-        // PHASE 2: Replay WAL
+        // Replay WAL
         std::ifstream file("wal.log", std::ios::binary);
         if (!file.is_open()) return; 
 
@@ -241,11 +243,31 @@ private:
         }
     }
 
+    void ttlTask() {
+        while (running) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100)); 
+
+            std::vector<Id> deadIds = expiry_manager.getExpiredIds();
+
+            if (!deadIds.empty()) {
+                std::unique_lock lock(rw_lock);
+                for (Id id : deadIds) {
+                    if (remove_internal(id)) {
+
+                        logOperation(0x02, id); // WAL deletion
+                        std::cout << "[TTL] Expired Document ID: " << id << "\n";
+                    }
+                }
+            }
+        }
+    }
+
 public:
     Collection() {
         recover();
         wal_file.open("wal.log", std::ios::binary | std::ios::app);
         janitor_thread = std::thread(&Collection::janitorTask, this);
+        ttl_thread     = std::thread(&Collection::ttlTask, this);
     }
 
     explicit Collection(std::size_t capacity_hint) {
@@ -253,12 +275,14 @@ public:
         db.reserve(capacity_hint);
         wal_file.open("wal.log", std::ios::binary | std::ios::app);
         janitor_thread = std::thread(&Collection::janitorTask, this);
+        ttl_thread     = std::thread(&Collection::ttlTask, this);
     }
 
     ~Collection() {
         running = false;
         cv.notify_all(); 
         if (janitor_thread.joinable()) janitor_thread.join();
+        if (ttl_thread.joinable())     ttl_thread.join();
     }
 
     void checkpoint() {
@@ -394,6 +418,7 @@ public:
         
         db.clear();
         indexer.clear();
+        next_id = 1;
         
         std::cout << "[Maintenance] DB Flushed.\n";
         
@@ -485,6 +510,10 @@ public:
         
         json += "}";
         return json;
+    }
+
+    void expire(Id id, int seconds) {
+        expiry_manager.setTTL(id, seconds);
     }
     
 };
