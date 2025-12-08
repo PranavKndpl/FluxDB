@@ -213,6 +213,17 @@ public:
         json += "]}";
         return json;
     }
+
+    void clear() {
+        std::unique_lock lock(rw_lock);
+        
+        storage.clear(); 
+        
+        std::cout << "[Maintenance] DB Flushed.\n";
+        
+        persistence.saveSnapshot(storage);
+        persistence.truncateWal();
+    }
 };
 
 }
