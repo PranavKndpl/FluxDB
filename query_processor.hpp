@@ -4,6 +4,7 @@
 #include "collection.hpp"
 #include "query_parser.hpp"
 #include "pubsub_manager.hpp"
+#include "database_manager.hpp"
 #include <string>
 #include <sstream>
 
@@ -11,7 +12,9 @@ namespace fluxdb {
 
 class QueryProcessor {
 private:
-    Collection& db;
+    DatabaseManager& db_manager; 
+    Collection* active_db;
+    
     PubSubManager& pubsub; 
     SOCKET clientSocket;
 
@@ -62,22 +65,28 @@ private:
     }
 
 public:
-    QueryProcessor(Collection& database, PubSubManager& ps, SOCKET client) : db(database), pubsub(ps), clientSocket(client) {}
+    QueryProcessor(DatabaseManager& manager, PubSubManager& ps, SOCKET client) : db_manager(manager), pubsub(ps), clientSocket(client), active_db(nullptr) {}
 
     std::string process(const std::string& request) {
         try {
-            if (request.rfind("INSERT ", 0) == 0)      return handleInsert(request.substr(7));
+            if (request.rfind("USE ", 0) == 0) {
+                return handleUse(request.substr(4));
+            }
+            else if (request == "SHOW DBS") {
+                return handleShowDbs();
+            }
+            else if (request.rfind("INSERT ", 0) == 0)      return handleInsert(request.substr(7));
             else if (request.rfind("FIND ", 0) == 0)   return handleFind(request.substr(5));
             else if (request.rfind("DELETE ", 0) == 0) return handleDelete(request.substr(7));
             else if (request.rfind("UPDATE ", 0) == 0) return handleUpdate(request.substr(7));
             else if (request.rfind("INDEX ", 0) == 0)  return handleIndex(request.substr(6));
             
             else if (request.rfind("CHECKPOINT", 0) == 0) {
-                db.checkpoint();
+                active_db->checkpoint();
                 return "OK CHECKPOINT_COMPLETE\n";
             }
             else if (request.rfind("FLUSHDB", 0) == 0) {
-                db.clear(); 
+                active_db->clear(); 
                 return "OK FLUSHED\n";
             }
             else if (request == "GET") {
@@ -90,7 +99,7 @@ public:
                 return handleConfig(request.substr(7));
             }
             else if (request == "STATS") {
-                return "OK " + db.getStats() + "\n";
+                return "OK " + active_db->getStats() + "\n";
             }
             else if (request.rfind("EXPIRE ", 0) == 0) {
                 return handleExpire(request.substr(7));
@@ -100,6 +109,9 @@ public:
             }
             else if (request.rfind("PUBLISH ", 0) == 0) {
                 return handlePublish(request.substr(8));
+            }
+            else if (request.rfind("DROP DATABASE ", 0) == 0) {
+                return handleDropDb(request.substr(14));
             }
             
             return "UNKNOWN_COMMAND\n";
@@ -111,14 +123,41 @@ public:
 
 private:
 
+    bool checkDbSelected(std::string& outError) {
+        if (active_db == nullptr) {
+            outError = "ERROR NO_DATABASE_SELECTED (Type 'USE <name>')\n";
+            return false;
+        }
+        return true;
+    }
+
+    std::string handleShowDbs() {
+        std::vector<std::string> dbs = db_manager.listDatabases();
+        
+        std::string json = "[";
+        for (size_t i = 0; i < dbs.size(); ++i) {
+            json += "\"" + dbs[i] + "\"";
+            if (i < dbs.size() - 1) json += ", ";
+        }
+        json += "]\n";
+        
+        return "OK " + json;
+    }
+
     std::string handleInsert(const std::string& json) {
+        std::string err;
+        if (!checkDbSelected(err)) return err;
+
         QueryParser parser(json);
         Document doc = parser.parseJSON();
-        Id id = db.insert(std::move(doc));
+        Id id = active_db->insert(std::move(doc));
         return "OK ID=" + std::to_string(id) + "\n";
     }
 
     std::string handleFind(const std::string& json) {
+        std::string err;
+        if (!checkDbSelected(err)) return err;
+
         QueryParser parser(json);
         Document query = parser.parseJSON();
         
@@ -137,7 +176,7 @@ private:
             std::string field = it->first;
             
             if (it->second->type != Type::Object) {
-                 ids = db.find(field, *it->second);
+                 ids = active_db->find(field, *it->second);
                  
                  if (!ids.empty()) {
                      usedIndex = true;
@@ -145,12 +184,12 @@ private:
             }
             
             if (!usedIndex) {
-                db.reportQueryMiss(field, isRange);
+                active_db->reportQueryMiss(field, isRange);
             }
         }
 
         if (!usedIndex) {
-            ids = db.findAll([this, &query](const Document& doc) {
+            ids = active_db->findAll([this, &query](const Document& doc) {
                 return this->matches(doc, query);
             });
         }
@@ -158,7 +197,7 @@ private:
         std::string response = "OK COUNT=" + std::to_string(ids.size()) + "\n";
         
         for(Id id : ids) {
-            auto res = db.getById(id);
+            auto res = active_db->getById(id);
             if (res) {
                 Value temp(res->get());
                 response += "ID " + std::to_string(id) + " " + temp.ToJson() + "\n"; 
@@ -168,9 +207,12 @@ private:
     }
 
     std::string handleDelete(const std::string& args) {
+        std::string err;
+        if (!checkDbSelected(err)) return err;
+
         try {
             Id id = std::stoull(args);
-            if (db.removeById(id)) return "OK DELETED\n";
+            if (active_db->removeById(id)) return "OK DELETED\n";
             return "ERROR NOT_FOUND\n";
         } catch (...) {
             return "ERROR INVALID_ID\n";
@@ -178,6 +220,9 @@ private:
     }
 
     std::string handleUpdate(const std::string& args) {
+        std::string err;
+        if (!checkDbSelected(err)) return err;
+
         size_t jsonStart = args.find('{');
         if (jsonStart == std::string::npos) return "ERROR MISSING_JSON\n";
 
@@ -188,7 +233,7 @@ private:
             QueryParser parser(args.substr(jsonStart));
             Document doc = parser.parseJSON();
 
-            if (db.update(id, doc)) return "OK UPDATED\n";
+            if (active_db->update(id, doc)) return "OK UPDATED\n";
             return "ERROR NOT_FOUND\n";
         } catch (...) {
             return "ERROR INVALID_FORMAT\n";
@@ -196,26 +241,32 @@ private:
     }
 
     std::string handleIndex(const std::string& args) {
+        std::string err;
+        if (!checkDbSelected(err)) return err;
+
         std::stringstream ss(args);
         std::string field;
         int type = 0;
         
         ss >> field;
         if (ss >> type) {
-            db.createIndex(field, type);
+            active_db->createIndex(field, type);
         } else {
-            db.createIndex(field, 0);
+            active_db->createIndex(field, 0);
         }
         return "OK INDEX_CREATED\n";
     }
 
     std::string handleGet(const std::string& args) {
+        std::string err;
+        if (!checkDbSelected(err)) return err;
+
         if (args.empty()) {
-             std::vector<Id> allIds = db.findAll([](const Document&){ return true; });
+             std::vector<Id> allIds = active_db->findAll([](const Document&){ return true; });
              
              std::string response = "OK COUNT=" + std::to_string(allIds.size()) + "\n";
              for(Id id : allIds) {
-                 auto res = db.getById(id);
+                 auto res = active_db->getById(id);
                  if (res) {
                      Value temp(res->get());
                      response += "ID " + std::to_string(id) + " " + temp.ToJson() + "\n";
@@ -234,7 +285,7 @@ private:
                 int count = 0;
                 
                 for (Id i = start; i <= end; ++i) {
-                     auto res = db.getById(i);
+                     auto res = active_db->getById(i);
                      if (res) {
                          Value temp(res->get());
                          response += "ID " + std::to_string(i) + " " + temp.ToJson() + "\n";
@@ -249,7 +300,7 @@ private:
 
         try {
             Id id = std::stoull(args);
-            auto result = db.getById(id); 
+            auto result = active_db->getById(id); 
             if (result) {
                 Value tempVal(result->get());
                 return "OK " + tempVal.ToJson() + "\n";
@@ -262,6 +313,9 @@ private:
     }
 
     std::string handleConfig(const std::string& args) {
+        std::string err;
+        if (!checkDbSelected(err)) return err;
+
         std::stringstream ss(args);
         std::string param;
         int value = -1; 
@@ -272,7 +326,7 @@ private:
             if (value != 0 && value != 1) return "ERROR INVALID_VALUE (Use 0 or 1)\n";
             
             bool state = (value == 1);
-            db.setAdaptive(state);
+            active_db->setAdaptive(state);
             return "OK CONFIG_UPDATED ADAPTIVE=" + std::string(state ? "ON" : "OFF") + "\n";
         }
         else if (param == "PUBSUB") {
@@ -287,12 +341,15 @@ private:
     }
 
     std::string handleExpire(const std::string& args) {
+        std::string err;
+        if (!checkDbSelected(err)) return err;
+
         std::stringstream ss(args);
         Id id;
         int seconds;
         
         if (ss >> id >> seconds) {
-            db.expire(id, seconds);
+            active_db->expire(id, seconds);
             return "OK TTL_SET\n";
         }
         return "ERROR INVALID_ARGS\n";
@@ -323,6 +380,38 @@ private:
 
         int receivers = pubsub.publish(channel, msg);
         return "OK RECEIVERS=" + std::to_string(receivers) + "\n";
+    }
+
+    std::string handleUse(const std::string& name) {
+        std::string dbName = name;
+        dbName.erase(dbName.find_last_not_of(" \n\r\t") + 1); // clean white space
+        if (dbName.empty()) return "ERROR INVALID_NAME\n";
+
+        bool created = false;
+
+        active_db = db_manager.getDatabase(dbName, &created); // switch pointer
+        
+        if (created) {
+            return "OK SWITCHED_TO " + dbName + " (NEW_DATABASE_CREATED)\n";
+        } else {
+            return "OK SWITCHED_TO " + dbName + "\n";
+        }
+    }
+
+    std::string handleDropDb(const std::string& name) {
+        std::string dbName = name;
+        dbName.erase(dbName.find_last_not_of(" \n\r\t") + 1);
+
+        std::string currentDbName = "";
+        
+        bool success = db_manager.dropDatabase(dbName);
+        
+        if (success) {
+            active_db = nullptr; 
+            
+            return "OK DROPPED " + dbName + " (Please USE a database)\n";
+        }
+        return "ERROR DB_NOT_FOUND\n";
     }
 };
 

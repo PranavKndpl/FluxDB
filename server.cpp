@@ -7,12 +7,13 @@
 
 #include "query_processor.hpp"
 #include "pubsub_manager.hpp"
+#include "database_manager.hpp" 
 
 #pragma comment(lib, "Ws2_32.lib")
 
 using namespace fluxdb;
 
-Collection* db_ptr = nullptr;
+DatabaseManager* manager_ptr = nullptr;
 PubSubManager* pubsub_ptr = nullptr;
 SOCKET serverSocket = INVALID_SOCKET;
 std::atomic<bool> is_running{true};
@@ -32,9 +33,9 @@ BOOL WINAPI ConsoleHandler(DWORD signal) {
 }
 
 void handle_client(SOCKET clientSocket) {
-    if (!db_ptr || !pubsub_ptr) { closesocket(clientSocket); return; }
+    if (!manager_ptr || !pubsub_ptr) { closesocket(clientSocket); return; }
 
-    QueryProcessor processor(*db_ptr, *pubsub_ptr, clientSocket); 
+    QueryProcessor processor(*manager_ptr, *pubsub_ptr, clientSocket); 
     
     DWORD timeout = 5000;
     setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
@@ -73,7 +74,7 @@ void handle_client(SOCKET clientSocket) {
             send(clientSocket, response.c_str(), response.size(), 0);
         }
     }
-    pubsub_ptr->unsubscribeAll(clientSocket); //When loop ends (client disconnects), remove them from PubSub
+    pubsub_ptr->unsubscribeAll(clientSocket);
     closesocket(clientSocket);
 }
 
@@ -106,10 +107,11 @@ int main() {
         return 1;
     }
 
-    Collection db;
+    DatabaseManager dbManager; 
+
     PubSubManager pubsub;
 
-    db_ptr = &db; 
+    manager_ptr = &dbManager; 
     pubsub_ptr = &pubsub;
 
     std::cout << "=== FluxDB Server Running ===\n";
@@ -127,7 +129,7 @@ int main() {
 
     std::cout << "[Server] Main loop finished.\n";
 
-    db_ptr = nullptr; 
+    manager_ptr = nullptr; 
     pubsub_ptr = nullptr;
     
     WSACleanup();
