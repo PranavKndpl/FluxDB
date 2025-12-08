@@ -3,6 +3,7 @@
 
 #include "collection.hpp"
 #include "query_parser.hpp"
+#include "pubsub_manager.hpp"
 #include <string>
 #include <sstream>
 
@@ -11,6 +12,8 @@ namespace fluxdb {
 class QueryProcessor {
 private:
     Collection& db;
+    PubSubManager& pubsub; 
+    SOCKET clientSocket;
 
     bool checkCondition(const Value& val, const Value& constraint) {
         if (constraint.type != Type::Object) {
@@ -59,7 +62,7 @@ private:
     }
 
 public:
-    QueryProcessor(Collection& database) : db(database) {}
+    QueryProcessor(Collection& database, PubSubManager& ps, SOCKET client) : db(database), pubsub(ps), clientSocket(client) {}
 
     std::string process(const std::string& request) {
         try {
@@ -91,6 +94,12 @@ public:
             }
             else if (request.rfind("EXPIRE ", 0) == 0) {
                 return handleExpire(request.substr(7));
+            }
+            else if (request.rfind("SUBSCRIBE ", 0) == 0) {
+                return handleSubscribe(request.substr(10));
+            }
+            else if (request.rfind("PUBLISH ", 0) == 0) {
+                return handlePublish(request.substr(8));
             }
             
             return "UNKNOWN_COMMAND\n";
@@ -253,16 +262,25 @@ private:
     }
 
     std::string handleConfig(const std::string& args) {
-        // Usage: CONFIG ADAPTIVE 1
         std::stringstream ss(args);
         std::string param;
-        int value;
+        int value = -1; 
         
         ss >> param >> value;
         
         if (param == "ADAPTIVE") {
-            db.setAdaptive(value == 1);
-            return "OK CONFIG_UPDATED\n";
+            if (value != 0 && value != 1) return "ERROR INVALID_VALUE (Use 0 or 1)\n";
+            
+            bool state = (value == 1);
+            db.setAdaptive(state);
+            return "OK CONFIG_UPDATED ADAPTIVE=" + std::string(state ? "ON" : "OFF") + "\n";
+        }
+        else if (param == "PUBSUB") {
+            if (value != 0 && value != 1) return "ERROR INVALID_VALUE (Use 0 or 1)\n";
+
+            bool state = (value == 1);
+            pubsub.setEnabled(state);
+            return "OK CONFIG_UPDATED PUBSUB=" + std::string(state ? "ON" : "OFF") + "\n";
         }
         
         return "ERROR UNKNOWN_CONFIG\n";
@@ -278,6 +296,33 @@ private:
             return "OK TTL_SET\n";
         }
         return "ERROR INVALID_ARGS\n";
+    }
+
+    std::string handleSubscribe(const std::string& channel) {
+        if (!pubsub.isEnabled()) return "ERROR PUBSUB_DISABLED\n";
+        
+        // Clean whitespace
+        std::string ch = channel;
+        ch.erase(ch.find_last_not_of(" \n\r\t") + 1);
+
+        pubsub.subscribe(ch, clientSocket);
+        return "OK SUBSCRIBED_TO " + ch + "\n";
+    }
+
+    std::string handlePublish(const std::string& args) {
+        if (!pubsub.isEnabled()) return "ERROR PUBSUB_DISABLED\n";
+
+        // Format: PUBLISH channel message
+        std::stringstream ss(args);
+        std::string channel, msg;
+        ss >> channel;
+        
+        // Read the rest of the line as the message
+        std::getline(ss, msg);
+        if (!msg.empty() && msg[0] == ' ') msg.erase(0, 1); // Remove leading space
+
+        int receivers = pubsub.publish(channel, msg);
+        return "OK RECEIVERS=" + std::to_string(receivers) + "\n";
     }
 };
 
