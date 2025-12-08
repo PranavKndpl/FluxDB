@@ -9,4 +9,4 @@ data/*
 bin/*.exe
 bin/*.pdb
 
-drivers/
+# drivers/
