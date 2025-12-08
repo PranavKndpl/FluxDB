@@ -2,3 +2,9 @@ NOTES
 *.exe
 test.cpp
 .vscode/
+
+data/*
+!data/.gitkeep
+
+bin/*.exe
+bin/*.pdb

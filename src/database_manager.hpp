@@ -19,10 +19,10 @@ private:
     std::unordered_map<std::string, std::unique_ptr<Collection>> databases;
     
     std::mutex lock;
-    const std::string DATA_FOLDER = "data";
+    const std::string DATA_FOLDER;
 
 public:
-    DatabaseManager() {
+    DatabaseManager(std::string path = "data") : DATA_FOLDER(path) {
         if (!fs::exists(DATA_FOLDER)) {
             fs::create_directory(DATA_FOLDER);
             std::cout << "[DB Manager] Created '" << DATA_FOLDER << "' directory.\n";
