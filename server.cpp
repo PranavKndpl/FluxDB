@@ -12,6 +12,7 @@
 #pragma comment(lib, "Ws2_32.lib")
 
 using namespace fluxdb;
+std::string SERVER_PASSWORD = "flux_secure";
 
 DatabaseManager* manager_ptr = nullptr;
 PubSubManager* pubsub_ptr = nullptr;
@@ -35,7 +36,7 @@ BOOL WINAPI ConsoleHandler(DWORD signal) {
 void handle_client(SOCKET clientSocket) {
     if (!manager_ptr || !pubsub_ptr) { closesocket(clientSocket); return; }
 
-    QueryProcessor processor(*manager_ptr, *pubsub_ptr, clientSocket); 
+    QueryProcessor processor(*manager_ptr, *pubsub_ptr, clientSocket, SERVER_PASSWORD);
     
     DWORD timeout = 5000;
     setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));

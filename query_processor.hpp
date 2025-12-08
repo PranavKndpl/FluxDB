@@ -18,6 +18,10 @@ private:
     PubSubManager& pubsub; 
     SOCKET clientSocket;
 
+    bool requires_auth = false;
+    std::string password = "";
+    bool is_authenticated = false;
+
     bool checkCondition(const Value& val, const Value& constraint) {
         if (constraint.type != Type::Object) {
             return val == constraint;
@@ -64,11 +68,37 @@ private:
         return true;
     }
 
-public:
-    QueryProcessor(DatabaseManager& manager, PubSubManager& ps, SOCKET client) : db_manager(manager), pubsub(ps), clientSocket(client), active_db(nullptr) {}
+    bool checkAuth(std::string& outError) {
+        if (requires_auth && !is_authenticated) {
+            outError = "ERROR NO_AUTH (Use 'AUTH <password>')\n";
+            return false;
+        }
+        return true;
+    }
 
+public:
+    QueryProcessor(DatabaseManager& manager, PubSubManager& ps, SOCKET client, const std::string& serverPass) 
+        : db_manager(manager), pubsub(ps), clientSocket(client), active_db(nullptr) 
+    {
+        if (!serverPass.empty()) {
+            requires_auth = true;
+            password = serverPass;
+            is_authenticated = false;
+        } else {
+            requires_auth = false;
+            is_authenticated = true; 
+        }
+    }
     std::string process(const std::string& request) {
         try {
+
+            if (request.rfind("AUTH ", 0) == 0) {
+                return handleAuth(request.substr(5));
+            }
+            
+            std::string err;
+            if (!checkAuth(err)) return err;
+
             if (request.rfind("USE ", 0) == 0) {
                 return handleUse(request.substr(4));
             }
@@ -122,6 +152,17 @@ public:
     }
 
 private:
+
+    std::string handleAuth(const std::string& args) {
+        std::string inputPass = args;
+        inputPass.erase(inputPass.find_last_not_of(" \n\r\t") + 1); //whitespace
+        
+        if (inputPass == password) {
+            is_authenticated = true;
+            return "OK AUTHENTICATED\n";
+        }
+        return "ERROR WRONG_PASSWORD\n";
+    }
 
     bool checkDbSelected(std::string& outError) {
         if (active_db == nullptr) {
