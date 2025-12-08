@@ -6,6 +6,8 @@
 #include "index_manager.hpp"
 #include "serializer.hpp"
 #include <fstream>
+#include <cmath>
+#include <set>
 
 #include <mutex>
 #include <shared_mutex>
@@ -408,30 +410,36 @@ public:
         std::cout << "[Config] Adaptive Indexing set to " << (enabled ? "ON" : "OFF") << "\n";
     }
 
-    // Called by QueryProcessor when a scan happens
+    int getDynamicThreshold() {
+        size_t count = db.size();
+        if (count < 100) return 2; 
+        
+        return static_cast<int>(std::log10(count)) + 2;
+    }
+
     void reportQueryMiss(const std::string& field, bool isRangeQuery) {
         if (!adaptive_mode) return;
+        
         std::unique_lock lock(rw_lock); 
 
         if (indexer.hasIndex(field)) return;
 
         miss_counter[field]++;
+        if (isRangeQuery) needs_sorted_index[field] = true;
         
-        // If ANY query requested a range (>, <), mark this field as needing a Sorted Index
-        if (isRangeQuery) {
-            needs_sorted_index[field] = true;
-        }
+        int current_threshold = getDynamicThreshold();
         
-        if (miss_counter[field] >= ADAPTIVE_THRESHOLD) {
+        if (miss_counter[field] >= current_threshold) {
             int type = 0; 
             if (needs_sorted_index[field]) {
                 type = 1; 
                 std::cout << "[Adaptive] Range query detected. Upgrading to SORTED index.\n";
             }
 
-            std::cout << "[Adaptive] Hot field detected: '" << field << "'. Auto-creating index...\n";
+            std::cout << "[Adaptive] Hot field '" << field << "' hit threshold (" 
+                      << miss_counter[field] << "/" << current_threshold << "). Indexing...\n";
             
-            indexer.createIndex(field, type); // Create the correct type
+            indexer.createIndex(field, type);
 
             // Backfill
             for (const auto& [id, doc] : db) {
@@ -442,9 +450,41 @@ public:
             }
             
             miss_counter[field] = 0;
-            needs_sorted_index[field] = false; // Reset
+            needs_sorted_index[field] = false;
             std::cout << "[Adaptive] Index built for '" << field << "'.\n";
         }
+    }
+
+    std::string getStats() {
+        std::shared_lock lock(rw_lock);
+        
+        std::string json = "{";
+        json += "\"documents\": " + std::to_string(db.size()) + ", ";
+        json += "\"next_id\": " + std::to_string(next_id) + ", ";
+        json += "\"adaptive_mode\": " + std::string(adaptive_mode ? "true" : "false") + ", ";
+        
+        std::set<std::string> unique_fields;
+        int limit = 50;
+        int count = 0;
+        
+        for (const auto& [id, doc] : db) {
+            for (const auto& [key, val] : doc) {
+                unique_fields.insert(key);
+            }
+            count++;
+            if (count >= limit) break;
+        }
+        
+        json += "\"fields\": [";
+        auto it = unique_fields.begin();
+        while (it != unique_fields.end()) {
+            json += "\"" + *it + "\"";
+            if (++it != unique_fields.end()) json += ", ";
+        }
+        json += "]";
+        
+        json += "}";
+        return json;
     }
     
 };

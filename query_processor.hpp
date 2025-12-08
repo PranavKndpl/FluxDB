@@ -86,6 +86,9 @@ public:
             else if (request.rfind("CONFIG ", 0) == 0) {
                 return handleConfig(request.substr(7));
             }
+            else if (request == "STATS") {
+                return "OK " + db.getStats() + "\n";
+            }
             
             return "UNKNOWN_COMMAND\n";
 
