@@ -95,7 +95,7 @@ public:
             if (request.rfind("AUTH ", 0) == 0) {
                 return handleAuth(request.substr(5));
             }
-            
+
             std::string err;
             if (!checkAuth(err)) return err;
 
@@ -142,6 +142,9 @@ public:
             }
             else if (request.rfind("DROP DATABASE ", 0) == 0) {
                 return handleDropDb(request.substr(14));
+            }
+            else if (request == "HELP") {
+                return handleHelp();
             }
             
             return "UNKNOWN_COMMAND\n";
@@ -453,6 +456,35 @@ private:
             return "OK DROPPED " + dbName + " (Please USE a database)\n";
         }
         return "ERROR DB_NOT_FOUND\n";
+    }
+
+    std::string handleHelp() {
+        std::string msg = "=== FluxDB v1.0 Commands ===\n";
+        
+        msg += "--- BASICS ---\n";
+        msg += "USE <db_name>             : Switch database\n";
+        msg += "SHOW DBS                  : List all databases\n";
+        msg += "DROP DATABASE <name>      : Delete database permanently\n";
+        msg += "AUTH <password>           : Authenticate\n";
+        
+        msg += "--- CRUD ---\n";
+        msg += "INSERT <json>             : Insert document\n";
+        msg += "GET <id> | <start-end>    : Get doc by ID or range\n";
+        msg += "FIND <json_query>         : Search (e.g. {\"age\": {\"$gt\": 18}})\n";
+        msg += "UPDATE <id> <json>        : Update document\n";
+        msg += "DELETE <id>               : Delete by ID\n";
+        
+        msg += "--- UTILITIES ---\n";
+        msg += "EXPIRE <id> <seconds>     : Set TTL for document\n";
+        msg += "STATS                     : Show DB stats and fields\n";
+        msg += "CHECKPOINT                : Force save to disk\n";
+        msg += "CONFIG <param> <value>    : Set ADAPTIVE (1/0) or PUBSUB (1/0)\n";
+        
+        msg += "--- REAL-TIME ---\n";
+        msg += "PUBLISH <ch> <msg>        : Send message\n";
+        msg += "SUBSCRIBE <ch>            : Listen to channel\n";
+        
+        return "OK \n" + msg;
     }
 };
 
