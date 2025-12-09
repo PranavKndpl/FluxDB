@@ -1,5 +1,5 @@
 #ifndef DOCUMENT_HPP
-#define DOCUMENT_HPP    
+#define DOCUMENT_HPP     
 
 #include<unordered_map>
 #include<cstdint>
@@ -7,7 +7,7 @@
 #include<string>
 #include<memory>
 #include<stdexcept>
-#include<iomanip> 
+#include<iomanip>
 #include<sstream> 
 #include<utility>
 #include<functional>
