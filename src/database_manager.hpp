@@ -32,13 +32,21 @@ public:
     Collection* getDatabase(const std::string& name, bool* was_created = nullptr) {
         std::lock_guard<std::mutex> lk(lock);
         
-        if (databases.find(name) == databases.end()) {
-            std::cout << "[DB Manager] Creating new DB: '" << name << "'\n";
-            databases[name] = std::make_unique<Collection>(name, DATA_FOLDER);
-            
-            if (was_created) *was_created = true; 
-        } else {
-            if (was_created) *was_created = false;
+        if (databases.find(name) != databases.end()) {
+            if (was_created) *was_created = false; 
+            return databases[name].get();
+        }
+
+        std::string walPath = DATA_FOLDER + "/" + name + ".wal";
+        std::string snapPath = DATA_FOLDER + "/" + name + ".flux";
+        
+        bool files_exist = fs::exists(walPath) || fs::exists(snapPath);
+
+        std::cout << "[DB Manager] Loading DB: '" << name << "'...\n";
+        databases[name] = std::make_unique<Collection>(name, DATA_FOLDER);
+        
+        if (was_created) {
+            *was_created = !files_exist; 
         }
         
         return databases[name].get();
@@ -76,9 +84,30 @@ public:
     std::vector<std::string> listDatabases() {
         std::lock_guard<std::mutex> lk(lock);
         std::vector<std::string> names;
+        std::set<std::string> unique_names; // Use set to avoid duplicates (.wal + .flux)
+
         for (const auto& [name, ptr] : databases) {
-            names.push_back(name);
+            unique_names.insert(name);
         }
+        try {
+            if (fs::exists(DATA_FOLDER) && fs::is_directory(DATA_FOLDER)) {
+                for (const auto& entry : fs::directory_iterator(DATA_FOLDER)) {
+                    if (entry.is_regular_file()) {
+                        std::string path = entry.path().string();
+                        std::string filename = entry.path().stem().string(); // "crm_db" from "crm_db.wal"
+                        std::string ext = entry.path().extension().string();
+
+                        if (ext == ".wal" || ext == ".flux") {
+                            unique_names.insert(filename);
+                        }
+                    }
+                }
+            }
+        } catch (...) {
+            std::cerr << "[Error] Could not scan data directory.\n";
+        }
+
+        names.assign(unique_names.begin(), unique_names.end());
         return names;
     }
 };
