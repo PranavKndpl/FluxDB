@@ -116,6 +116,8 @@ public:
                 return "OK CHECKPOINT_COMPLETE\n";
             }
             else if (request.rfind("FLUSHDB", 0) == 0) {
+                std::string err;
+                if (!checkDbSelected(err)) return err;
                 active_db->clear(); 
                 return "OK FLUSHED\n";
             }
@@ -483,6 +485,8 @@ private:
         msg += "--- REAL-TIME ---\n";
         msg += "PUBLISH <ch> <msg>        : Send message\n";
         msg += "SUBSCRIBE <ch>            : Listen to channel\n";
+
+        msg += "\n\n(type 'exit' to exit)\n";
         
         return "OK \n" + msg;
     }
