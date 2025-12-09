@@ -79,6 +79,55 @@ pip install .
 
 -----
 
+## 🇨🇵 C++ Driver
+
+FluxDB includes a header-only C++17 driver for high-performance applications.
+
+### Option A: CMake FetchContent (Recommended)
+You can include the driver directly in your `CMakeLists.txt` without downloading files manually.
+
+```cmake
+include(FetchContent)
+
+FetchContent_Declare(
+  fluxdb_driver
+  GIT_REPOSITORY [https://github.com/PranavKndpl/FluxDB.git](https://github.com/PranavKndpl/FluxDB.git)
+  SOURCE_SUBDIR drivers/cpp
+)
+FetchContent_MakeAvailable(fluxdb_driver)
+
+# Link it to your executable
+target_link_libraries(my_app PRIVATE fluxdb::driver)
+````
+
+### Option B: Manual Integration
+
+1.  Copy the files from `drivers/cpp/` into your project.
+2.  Include `fluxdb_client.hpp`.
+3.  Link with `ws2_32` (Windows only).
+
+### Usage Example
+
+```cpp
+#include "fluxdb_client.hpp"
+
+int main() {
+    fluxdb::FluxDBClient client("127.0.0.1", 8080);
+    
+    if (client.auth("flux_admin")) {
+        client.use("production_db");
+        
+        fluxdb::Document doc;
+        doc["status"] = std::make_shared<fluxdb::Value>("active");
+        
+        client.insert(doc);
+    }
+    return 0;
+}
+```
+
+-----
+
 ## 🚀 Quick Start Guide
 
 ### 1\. Start the Server
