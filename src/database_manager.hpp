@@ -21,13 +21,53 @@ private:
     std::mutex lock;
     const std::string DATA_FOLDER;
 
+    // --- AUTH CONFIG ---
+    std::string system_password = "flux_admin"; 
+    const std::string CONFIG_FILE = "flux_config.cfg";
+
+    void loadConfig() {
+        std::string path = DATA_FOLDER + "/" + CONFIG_FILE;
+        if (fs::exists(path)) {
+            std::ifstream file(path);
+            if (file.is_open()) {
+                std::getline(file, system_password);
+                system_password.erase(system_password.find_last_not_of(" \n\r\t") + 1);
+            }
+        } else {
+            saveConfig(); 
+        }
+    }
+
+    void saveConfig() {
+        std::string path = DATA_FOLDER + "/" + CONFIG_FILE;
+        std::ofstream file(path);
+        if (file.is_open()) {
+            file << system_password;
+        }
+    }
+
 public:
     DatabaseManager(std::string path = "data") : DATA_FOLDER(path) {
         if (!fs::exists(DATA_FOLDER)) {
             fs::create_directory(DATA_FOLDER);
             std::cout << "[DB Manager] Created '" << DATA_FOLDER << "' directory.\n";
         }
+        loadConfig();
     }
+
+    bool validatePassword(const std::string& input) {
+        return input == system_password;
+    }
+
+    void setPassword(const std::string& newPass) {
+        std::lock_guard<std::mutex> lk(lock);
+        system_password = newPass;
+        saveConfig();
+        std::cout << "[System] Password updated.\n";
+    }
+
+    std::string getPassword() const { return system_password; }
+
 
     Collection* getDatabase(const std::string& name, bool* was_created = nullptr) {
         std::lock_guard<std::mutex> lk(lock);

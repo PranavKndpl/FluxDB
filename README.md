@@ -28,7 +28,7 @@ Designed as a lightweight, self-optimizing engine, it features **Adaptive Indexi
 
 You can download the pre-compiled server and CLI for Windows from the Releases page.
 
-1.  Go to **[FluxDB v1.0 Release](https://github.com/PranavKndpl/FluxDB/releases/tag/V1.0)**.
+1.  Go to **[FluxDB v1.0 Release](https://github.com/PranavKndpl/FluxDB/releases/tag/V1.1)**.
 2.  Download `FluxDB_v1.0.zip`.
 3.  Extract the folder.
 4.  Run `fluxd.exe` to start the server.
@@ -172,21 +172,24 @@ You can use the built-in CLI (`flux.exe`) or send raw text commands via TCP.
 | Category | Command | Description |
 | :--- | :--- | :--- |
 | **Auth** | `AUTH <password>` | Authenticate session. |
-| **System** | `USE <db_name>` | Switch/Create a database. |
+| **System** | `USE <db_name>` | Switch to or create a database. |
 | | `SHOW DBS` | List all databases. |
 | | `DROP DATABASE <name>` | Delete a database permanently. |
-| | `STATS` | View document count and schema sample. |
-| | `HELP` | Show this help menu. |
-| **CRUD** | `INSERT <json>` | Create a document. |
+| | `STATS` | Show DB stats and indexed fields. |
+| | `CHECKPOINT` | Force save database to disk. |
+| | `HELP` | Show help menu. |
+| **CRUD** | `INSERT <json>` | Insert a document. |
 | | `GET <id>` | Retrieve document by ID. |
-| | `FIND <json_query>` | Search (e.g. `{"age": {"$gt": 18}}`). |
+| | `GET <start-end>` | Retrieve documents by ID range. |
+| | `FIND <json_query>` | Search documents (e.g. `{"age":{"$gt":18}}`). |
 | | `UPDATE <id> <json>` | Update a document. |
-| | `DELETE <id>` | Delete a document. |
-| **Real-Time** | `EXPIRE <id> <sec>` | Set a TTL (auto-delete). |
-| | `SUBSCRIBE <ch>` | Listen to a channel. |
-| | `PUBLISH <ch> <msg>` | Broadcast a message. |
-| **Config** | `CONFIG ADAPTIVE 1` | Enable Adaptive Indexing. |
-| | `CONFIG PUBSUB 1` | Enable Pub/Sub module. |
+| | `DELETE <id>` | Delete a document by ID. |
+| **Utilities** | `EXPIRE <id> <seconds>` | Set TTL for a document (auto-delete). |
+| **Real-Time** | `SUBSCRIBE <ch>` | Listen to a pub/sub channel. |
+| | `PUBLISH <ch> <msg>` | Publish a message to a channel. |
+| **Config** | `CONFIG SET_PASSWORD <new>` | Change system password. |
+| | `CONFIG ADAPTIVE <1/0>` | Enable or disable Adaptive Indexing. |
+| | `CONFIG PUBSUB <1/0>` | Enable or disable Pub/Sub module. |
 
 -----
 

@@ -69,7 +69,7 @@ private:
     }
 
     bool checkAuth(std::string& outError) {
-        if (requires_auth && !is_authenticated) {
+        if (!is_authenticated) {
             outError = "ERROR NO_AUTH (Use 'AUTH <password>')\n";
             return false;
         }
@@ -77,17 +77,10 @@ private:
     }
 
 public:
-    QueryProcessor(DatabaseManager& manager, PubSubManager& ps, SOCKET client, const std::string& serverPass) 
+    QueryProcessor(DatabaseManager& manager, PubSubManager& ps, SOCKET client) 
         : db_manager(manager), pubsub(ps), clientSocket(client), active_db(nullptr) 
     {
-        if (!serverPass.empty()) {
-            requires_auth = true;
-            password = serverPass;
-            is_authenticated = false;
-        } else {
-            requires_auth = false;
-            is_authenticated = true; 
-        }
+        is_authenticated = false;
     }
     std::string process(const std::string& request) {
         try {
@@ -160,13 +153,47 @@ private:
 
     std::string handleAuth(const std::string& args) {
         std::string inputPass = args;
-        inputPass.erase(inputPass.find_last_not_of(" \n\r\t") + 1); //whitespace
+        inputPass.erase(inputPass.find_last_not_of(" \n\r\t") + 1); // trim
         
-        if (inputPass == password) {
+        if (db_manager.validatePassword(inputPass)) {
             is_authenticated = true;
             return "OK AUTHENTICATED\n";
         }
         return "ERROR WRONG_PASSWORD\n";
+    }
+
+    std::string handleConfig(const std::string& args) {
+        if (args.rfind("SET_PASSWORD ", 0) == 0) {
+            std::string newPass = args.substr(13);
+            newPass.erase(newPass.find_last_not_of(" \n\r\t") + 1);
+            if (newPass.empty()) return "ERROR EMPTY_PASSWORD\n";
+            
+            db_manager.setPassword(newPass);
+            return "OK PASSWORD_UPDATED\n";
+        }
+
+        std::string err;
+        if (!checkDbSelected(err)) return err;
+
+        std::stringstream ss(args);
+        std::string param;
+        int value = -1; 
+        
+        ss >> param >> value;
+        if (param == "ADAPTIVE") {
+            if (value != 0 && value != 1) return "ERROR INVALID_VALUE (Use 0 or 1)\n";
+            bool state = (value == 1);
+            active_db->setAdaptive(state);
+            return "OK CONFIG_UPDATED ADAPTIVE=" + std::string(state ? "ON" : "OFF") + "\n";
+        }
+        else if (param == "PUBSUB") {
+            if (value != 0 && value != 1) return "ERROR INVALID_VALUE (Use 0 or 1)\n";
+            bool state = (value == 1);
+            pubsub.setEnabled(state);
+            return "OK CONFIG_UPDATED PUBSUB=" + std::string(state ? "ON" : "OFF") + "\n";
+        }
+        
+        return "ERROR UNKNOWN_CONFIG\n";
     }
 
     bool checkDbSelected(std::string& outError) {
@@ -358,34 +385,6 @@ private:
         }
     }
 
-    std::string handleConfig(const std::string& args) {
-        std::string err;
-        if (!checkDbSelected(err)) return err;
-
-        std::stringstream ss(args);
-        std::string param;
-        int value = -1; 
-        
-        ss >> param >> value;
-        
-        if (param == "ADAPTIVE") {
-            if (value != 0 && value != 1) return "ERROR INVALID_VALUE (Use 0 or 1)\n";
-            
-            bool state = (value == 1);
-            active_db->setAdaptive(state);
-            return "OK CONFIG_UPDATED ADAPTIVE=" + std::string(state ? "ON" : "OFF") + "\n";
-        }
-        else if (param == "PUBSUB") {
-            if (value != 0 && value != 1) return "ERROR INVALID_VALUE (Use 0 or 1)\n";
-
-            bool state = (value == 1);
-            pubsub.setEnabled(state);
-            return "OK CONFIG_UPDATED PUBSUB=" + std::string(state ? "ON" : "OFF") + "\n";
-        }
-        
-        return "ERROR UNKNOWN_CONFIG\n";
-    }
-
     std::string handleExpire(const std::string& args) {
         std::string err;
         if (!checkDbSelected(err)) return err;
@@ -468,6 +467,10 @@ private:
         msg += "SHOW DBS                  : List all databases\n";
         msg += "DROP DATABASE <name>      : Delete database permanently\n";
         msg += "AUTH <password>           : Authenticate\n";
+
+        msg += "--- CONFIG ---\n";
+        msg += "CONFIG SET_PASSWORD <new> : Change system password\n";
+        msg += "CONFIG <param> <val>      : Set ADAPTIVE (1/0) or PUBSUB (1/0)\n";
         
         msg += "--- CRUD ---\n";
         msg += "INSERT <json>             : Insert document\n";
@@ -480,7 +483,6 @@ private:
         msg += "EXPIRE <id> <seconds>     : Set TTL for document\n";
         msg += "STATS                     : Show DB stats and fields\n";
         msg += "CHECKPOINT                : Force save to disk\n";
-        msg += "CONFIG <param> <value>    : Set ADAPTIVE (1/0) or PUBSUB (1/0)\n";
         
         msg += "--- REAL-TIME ---\n";
         msg += "PUBLISH <ch> <msg>        : Send message\n";

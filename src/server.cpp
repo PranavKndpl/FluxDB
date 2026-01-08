@@ -37,7 +37,7 @@ BOOL WINAPI ConsoleHandler(DWORD signal) {
 void handle_client(SOCKET clientSocket) {
     if (!manager_ptr || !pubsub_ptr) { closesocket(clientSocket); return; }
 
-    QueryProcessor processor(*manager_ptr, *pubsub_ptr, clientSocket, SERVER_PASSWORD); 
+    QueryProcessor processor(*manager_ptr, *pubsub_ptr, clientSocket); 
     
     DWORD timeout = 5000;
     setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
@@ -85,12 +85,15 @@ int main(int argc, char* argv[]) {
 
     int port = 8080;
     std::string dataPath = "data"; 
+    std::string bindIP = "";
 
     if (argc > 1) port = std::stoi(argv[1]);
 
     if (argc > 2) {
         dataPath = argv[2];
     } 
+
+    if (argc > 3) bindIP = argv[3];
 
     else if (fs::exists("../data") && fs::is_directory("../data")) {
         dataPath = "../data";
@@ -103,6 +106,12 @@ int main(int argc, char* argv[]) {
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_addr.s_addr = INADDR_ANY;
     serverAddr.sin_port = htons(port); 
+
+    if (bindIP.empty()) {
+        serverAddr.sin_addr.s_addr = INADDR_ANY; // Bind to 0.0.0.0 (All IPs)
+    } else {
+        inet_pton(AF_INET, bindIP.c_str(), &serverAddr.sin_addr); // Bind to specific IP
+    }
 
     if (bind(serverSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
         std::cerr << "Bind failed (Port " << port << " in use?).\n";
@@ -122,10 +131,12 @@ int main(int argc, char* argv[]) {
     manager_ptr = &dbManager; 
     pubsub_ptr = &pubsub;
 
-    std::cout << "=== FluxDB Server Running on Port " << port << " ===\n";
-    std::cout << "=== Storage Path: " << fs::absolute(dataPath) << " ===\n";
-    std::cout << "=== Security: Enabled (Default pass: '" << SERVER_PASSWORD << "') ===\n";
-
+    std::cout << "=== FluxDB Server Running ===\n";
+    std::cout << " > IP:   " << (bindIP.empty() ? "0.0.0.0 (All Interfaces)" : bindIP) << "\n";
+    std::cout << " > Port: " << port << "\n";
+    std::cout << " > Path: " << fs::absolute(dataPath) << "\n";
+    std::cout << " > Auth: " << (dbManager.getPassword().empty() ? "Disabled" : "Enabled") << "\n";
+    
     while (is_running) {
         SOCKET client = accept(serverSocket, nullptr, nullptr);
         if (client == INVALID_SOCKET) {
