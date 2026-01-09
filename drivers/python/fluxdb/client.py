@@ -209,6 +209,8 @@ class FluxDB:
         cmd = f"SUBSCRIBE {channel}\n"
         self.sock.sendall(cmd.encode('utf-8'))
         print(f"🎧 Listening to '{channel}'... (Ctrl+C to stop)")
+
+        self.sock.settimeout(None)
         
         try:
             buffer = ""

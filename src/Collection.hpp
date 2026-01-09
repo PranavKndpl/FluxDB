@@ -43,12 +43,20 @@ private:
     void janitorTask() {
         while (running) {
             std::unique_lock<std::mutex> lk(cv_m);
-
             if (cv.wait_for(lk, std::chrono::seconds(5), [this]{ return !running; })) break;
 
-            // Check size safely
-            if (persistence.getWalSize() > MAX_WAL_SIZE) {
-                lk.unlock(); // Release CV lock before checkpointing to prevent deadlock
+            // --- Thread-Safe Size Check ---
+            bool needsCheckpoint = false;
+            {
+                // Lock access to shared resources before checking persistence
+                std::shared_lock lock(rw_lock); 
+                if (persistence.getWalSize() > MAX_WAL_SIZE) {
+                    needsCheckpoint = true;
+                }
+            } 
+
+            if (needsCheckpoint) {
+                lk.unlock(); // Release CV lock
                 std::cout << "[Janitor] Compacting WAL...\n";
                 checkpoint();
             }

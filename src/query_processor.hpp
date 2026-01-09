@@ -105,6 +105,8 @@ public:
             else if (request.rfind("INDEX ", 0) == 0)  return handleIndex(request.substr(6));
             
             else if (request.rfind("CHECKPOINT", 0) == 0) {
+                std::string err;
+                if (!checkDbSelected(err)) return err;
                 active_db->checkpoint();
                 return "OK CHECKPOINT_COMPLETE\n";
             }
@@ -124,6 +126,8 @@ public:
                 return handleConfig(request.substr(7));
             }
             else if (request == "STATS") {
+                std::string err;
+                if (!checkDbSelected(err)) return err;
                 return "OK " + active_db->getStats() + "\n";
             }
             else if (request.rfind("EXPIRE ", 0) == 0) {

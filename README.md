@@ -66,7 +66,7 @@ You can install the driver directly using pip:
 pip install fluxdb-driver
 ```
 
-*View on PyPI: [fluxdb-driver](https://www.google.com/search?q=https://pypi.org/project/fluxdb-driver/)*
+*View on PyPI: [fluxdb-driver](https://pypi.org/project/fluxdb-driver/)*
 
 ### 2\. Install from Repository (For Developers)
 
